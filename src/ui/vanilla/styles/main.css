@@ -82,11 +82,19 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .log-header h2 {
   margin: 0;
   font-size: 1.1rem;
+}
+
+.log-header-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .log-filters {

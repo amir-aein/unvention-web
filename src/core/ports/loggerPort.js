@@ -5,6 +5,7 @@
   root.loggerPortContract = {
     append: "append({ level, message, context, timestamp }) => entry",
     clear: "clear()",
+    replaceAll: "replaceAll(entries) => void",
     getEntries: "getEntries() => entry[]",
     subscribe: "subscribe(listener) => unsubscribe",
   };

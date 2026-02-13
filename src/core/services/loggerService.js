@@ -24,6 +24,35 @@
       return this.loggerPort.getEntries();
     }
 
+    replaceEntries(entries) {
+      const normalizedEntries = (entries || []).map((entry) => ({
+        id: entry.id,
+        level: this.normalizeLevel(entry.level),
+        message: entry.message || "",
+        context: entry.context || {},
+        timestamp: entry.timestamp ? new Date(entry.timestamp) : new Date(),
+      }));
+
+      if (typeof this.loggerPort.replaceAll === "function") {
+        this.loggerPort.replaceAll(normalizedEntries);
+      } else {
+        this.loggerPort.clear();
+        normalizedEntries.forEach((entry) => {
+          this.loggerPort.append(entry);
+        });
+      }
+    }
+
+    toSerializableEntries() {
+      return this.getEntries().map((entry) => ({
+        id: entry.id,
+        level: entry.level,
+        message: entry.message,
+        context: entry.context || {},
+        timestamp: entry.timestamp instanceof Date ? entry.timestamp.toISOString() : entry.timestamp,
+      }));
+    }
+
     subscribe(listener) {
       return this.loggerPort.subscribe(listener);
     }

@@ -21,7 +21,10 @@
       <aside class="log-sidebar" aria-label="Action log">
         <div class="log-header">
           <h2>Action Log</h2>
-          <button id="clear-log" type="button">Clear</button>
+          <div class="log-header-actions">
+            <button id="clear-log" type="button">Clear</button>
+            <button id="reset-game" type="button">Reset Game</button>
+          </div>
         </div>
         <div class="log-filters">
           <label><input type="checkbox" value="info" checked /> Info</label>
@@ -34,8 +37,11 @@
     </main>
     <script src="src/shared/logLevels.js"></script>
     <script src="src/core/ports/loggerPort.js"></script>
+    <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
+    <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
+    <script src="src/core/services/gameStateService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js"></script>
     <script src="src/app/container.js"></script>
     <script src="src/app/bootstrap.js"></script>

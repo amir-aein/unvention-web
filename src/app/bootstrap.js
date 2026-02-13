@@ -2,6 +2,18 @@
   const root = globalScope.Unvention || (globalScope.Unvention = {});
   const container = root.createContainer();
   const loggerService = container.loggerService;
+  const gameStateService = container.gameStateService;
+  const loadedState = gameStateService.load();
+
+  if (loadedState.logs.length > 0) {
+    loggerService.replaceEntries(loadedState.logs);
+  }
+
+  loggerService.subscribe(function persistLogs() {
+    gameStateService.update({
+      logs: loggerService.toSerializableEntries(),
+    });
+  });
 
   root.createLogSidebar(loggerService);
 
@@ -26,8 +38,20 @@
     });
   });
 
-  loggerService.logEvent("info", "Logging system initialized", { source: "system" });
-  loggerService.logEvent("debug", "Layered architecture ready for game integration", {
-    source: "system",
+  document.getElementById("reset-game").addEventListener("click", function onResetGame() {
+    gameStateService.reset();
+    loggerService.replaceEntries([]);
+    loggerService.logEvent("warn", "Game reset to default state", { source: "ui" });
   });
+
+  if (loadedState.logs.length === 0) {
+    loggerService.logEvent("info", "Logging system initialized", { source: "system" });
+    loggerService.logEvent("debug", "Layered architecture ready for game integration", {
+      source: "system",
+    });
+  } else {
+    loggerService.logEvent("info", "Previous session restored from local storage", {
+      source: "system",
+    });
+  }
 })(typeof window !== "undefined" ? window : globalThis);

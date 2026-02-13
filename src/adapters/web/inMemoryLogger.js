@@ -27,6 +27,18 @@
       this.emit();
     }
 
+    replaceAll(entries) {
+      this.entries = entries.map((entry, index) => ({
+        id: entry.id || index + 1,
+        level: entry.level,
+        message: entry.message,
+        context: entry.context || {},
+        timestamp: entry.timestamp ? new Date(entry.timestamp) : new Date(),
+      }));
+      this.nextId = this.entries.length + 1;
+      this.emit();
+    }
+
     getEntries() {
       return [...this.entries];
     }
