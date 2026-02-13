@@ -49,6 +49,36 @@
       [1, 6, 5, 5, 4],
     ],
   ];
+  const WORKSHOP_IDEA_ANCHORS = {
+    W1: [
+      { row: 0, col: 1 },
+      { row: 0, col: 3 },
+      { row: 1, col: 3 },
+      { row: 2, col: 0 },
+      { row: 3, col: 1 },
+    ],
+    W2: [
+      { row: 0, col: 0 },
+      { row: 0, col: 1 },
+      { row: 2, col: 0 },
+      { row: 2, col: 3 },
+      { row: 3, col: 2 },
+    ],
+    W3: [
+      { row: 0, col: 1 },
+      { row: 1, col: 0 },
+      { row: 2, col: 2 },
+      { row: 3, col: 0 },
+      { row: 3, col: 3 },
+    ],
+    W4: [
+      { row: 0, col: 3 },
+      { row: 1, col: 1 },
+      { row: 1, col: 3 },
+      { row: 3, col: 1 },
+      { row: 3, col: 2 },
+    ],
+  };
 
   function getWorkshopLayoutsForSeed(_seed) {
     // Intentionally fixed for now; later this can return a deterministic
@@ -114,9 +144,7 @@
 
       const context = state.workshopPhaseContext?.[playerId] || {};
       if (outcomeType === "eureka") {
-        const excludedNumber = Number(context.journalChosenNumber);
         return [1, 2, 3, 4, 5, 6]
-          .filter((value) => !Number.isInteger(excludedNumber) || value !== excludedNumber)
           .map((value, index) => ({
             key: "workshop-eureka-" + String(index),
             label: String(value),
@@ -506,6 +534,10 @@
         builtAtDay: state.currentDay,
       });
       player.mechanisms = mechanisms;
+      const workshop = player.workshops.find((item) => item.id === draft.workshopId);
+      const unlockedIdeas = workshop
+        ? this.updateUnlockedWorkshopIdeas(workshop, draft.path, state)
+        : [];
       player.spentWrenches = Number(player.spentWrenches || 0) + cost;
       player.lastBuildAtTurn = state.turnNumber;
       player.lastBuildAtDay = state.currentDay;
@@ -522,8 +554,58 @@
         workshopId: draft.workshopId,
         size: draft.path.length,
         wrenchCost: cost,
+        unlockedIdeas: unlockedIdeas.length,
+      });
+      unlockedIdeas.forEach((idea) => {
+        this.loggerService.logEvent(
+          "info",
+          "Player X unlocked workshop idea " + String(idea.id) + " in " + String(draft.workshopId),
+          {
+            playerId,
+            workshopId: draft.workshopId,
+            ideaId: idea.id,
+          },
+        );
       });
       return { ok: true, reason: null, state: updated };
+    }
+
+    updateUnlockedWorkshopIdeas(workshop, mechanismPath, state) {
+      const ideas = this.ensureWorkshopIdeas(workshop);
+      const pathKeys = new Set(
+        (Array.isArray(mechanismPath) ? mechanismPath : []).map((item) =>
+          this.pointKey({ row: Number(item.row), col: Number(item.col) }),
+        ),
+      );
+      const unlocked = [];
+      ideas.forEach((idea) => {
+        if (idea.status === "unlocked") {
+          return;
+        }
+        const covered = this.getIdeaSurroundingPoints(idea).every((point) =>
+          pathKeys.has(this.pointKey(point)),
+        );
+        if (!covered) {
+          return;
+        }
+        idea.status = "unlocked";
+        idea.unlockedAtTurn = state.turnNumber;
+        idea.unlockedAtDay = state.currentDay;
+        unlocked.push(idea);
+      });
+      workshop.ideas = ideas;
+      return unlocked;
+    }
+
+    getIdeaSurroundingPoints(idea) {
+      const row = Number(idea.row);
+      const col = Number(idea.col);
+      return [
+        { row, col },
+        { row, col: col + 1 },
+        { row: row + 1, col },
+        { row: row + 1, col: col + 1 },
+      ];
     }
 
     placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
@@ -734,6 +816,7 @@
       const state = this.gameStateService.getState();
       const layouts = getWorkshopLayoutsForSeed(state.rngSeed);
       const template = layouts[workshopNumber - 1] || layouts[0];
+      const workshopId = "W" + String(workshopNumber);
       const cells = template.map((row) =>
         row.map((token) => {
           if (token === null) {
@@ -758,13 +841,71 @@
         }),
       );
       return {
-        id: "W" + String(workshopNumber),
+        id: workshopId,
         size: WORKSHOP_SIZE,
         cells,
+        ideas: this.createWorkshopIdeas(workshopId),
         partsByNumber: this.countWorkshopPartsByNumber(cells),
         lastWorkedAtTurn: null,
         lastWorkedAtDay: null,
       };
+    }
+
+    createWorkshopIdeas(workshopId) {
+      const anchors = WORKSHOP_IDEA_ANCHORS[workshopId] || [];
+      return anchors.map((anchor, index) => ({
+        id: workshopId + "-I" + String(index + 1),
+        row: Number(anchor.row),
+        col: Number(anchor.col),
+        status: "locked",
+        unlockedAtTurn: null,
+        unlockedAtDay: null,
+      }));
+    }
+
+    getWorkshopIdeaAnchors(workshopId) {
+      return (WORKSHOP_IDEA_ANCHORS[workshopId] || []).map((anchor) => ({
+        row: Number(anchor.row),
+        col: Number(anchor.col),
+      }));
+    }
+
+    ensureWorkshopIdeas(workshop) {
+      if (!workshop || !workshop.id) {
+        return [];
+      }
+      const anchors = this.getWorkshopIdeaAnchors(workshop.id);
+      const existing = Array.isArray(workshop.ideas) ? workshop.ideas : [];
+      if (existing.length === anchors.length) {
+        return existing;
+      }
+      const byAnchor = new Map(
+        existing.map((idea) => [String(idea.row) + ":" + String(idea.col), idea]),
+      );
+      const normalized = anchors.map((anchor, index) => {
+        const key = String(anchor.row) + ":" + String(anchor.col);
+        const previous = byAnchor.get(key);
+        if (previous) {
+          return {
+            id: previous.id || workshop.id + "-I" + String(index + 1),
+            row: Number(anchor.row),
+            col: Number(anchor.col),
+            status: previous.status === "unlocked" ? "unlocked" : "locked",
+            unlockedAtTurn: previous.unlockedAtTurn ?? null,
+            unlockedAtDay: previous.unlockedAtDay ?? null,
+          };
+        }
+        return {
+          id: workshop.id + "-I" + String(index + 1),
+          row: Number(anchor.row),
+          col: Number(anchor.col),
+          status: "locked",
+          unlockedAtTurn: null,
+          unlockedAtDay: null,
+        };
+      });
+      workshop.ideas = normalized;
+      return normalized;
     }
 
     countWorkshopPartsByNumber(cells) {

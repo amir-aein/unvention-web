@@ -146,6 +146,17 @@
     breadcrumb.innerHTML = crumbs.join('<span class="action-footer__separator">&gt;</span>');
   }
 
+  function renderFooterWrenchCount(state) {
+    const wrenchCounter = document.getElementById("footer-wrench-count");
+    if (!wrenchCounter) {
+      return;
+    }
+    const available = typeof roundEngineService.getAvailableWrenches === "function"
+      ? roundEngineService.getAvailableWrenches(activePlayerId)
+      : 0;
+    wrenchCounter.textContent = "🔧 " + String(available) + " wrenches";
+  }
+
   function generateRandomSeed() {
     return "seed-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
@@ -219,6 +230,7 @@
       }
     }
     renderPhaseBreadcrumb(withAutoWorkshopState.phase);
+    renderFooterWrenchCount(withAutoWorkshopState);
     const advanceButton = document.getElementById("advance-phase");
     advanceButton.textContent = getNextPhaseLabel(withAutoWorkshopState);
     advanceButton.disabled = !canAdvancePhase(withAutoWorkshopState);
@@ -266,17 +278,9 @@
         Array.isArray(draft?.path) &&
         draft.path.length >= 2;
       controls.innerHTML =
-        '<div class="journal-control-row">' +
-        '<span class="journal-chip journal-chip--active">Wrenches ' +
-        String(availableWrenches) +
-        "</span>" +
-        '<span class="journal-chip">Cost ' +
-        String(buildCost) +
-        "</span>" +
         (Array.isArray(draft?.path)
-          ? '<span class="journal-chip">Draft ' + String(draft.path.length) + " parts</span>"
+          ? '<div class="journal-control-row"><span class="journal-chip">Draft ' + String(draft.path.length) + " parts</span></div>"
           : "") +
-        "</div>" +
         '<div class="journal-control-row">' +
         '<button type="button" class="journal-chip journal-chip--group" data-action="finish-building" ' +
         (canFinish ? "" : "disabled") +
@@ -394,7 +398,13 @@
       : "<span class='journal-muted'>No numbers remaining.</span>";
 
     if (state.rollAndGroup?.outcomeType === "quantum_leap") {
+      const quantumRoll = Array.isArray(state.rollAndGroup?.dice) && state.rollAndGroup.dice.length > 0
+        ? state.rollAndGroup.dice.join(", ")
+        : "";
       controls.innerHTML =
+        (quantumRoll
+          ? "<div class='journal-control-row'><span class='journal-roll-banner'>New turn roll: " + quantumRoll + "</span></div>"
+          : "") +
         "<div class='journal-control-row'><span class='journal-muted'>Quantum Leap skips journaling.</span></div>";
       if (controls.style) {
         controls.style.display = "grid";
@@ -403,10 +413,23 @@
     }
 
     let controlsHtml = "";
+    const showTurnRoll =
+      !selectedGroupKey &&
+      Number(selection?.placementsThisTurn || 0) === 0 &&
+      Array.isArray(state.rollAndGroup?.dice) &&
+      state.rollAndGroup.dice.length > 0;
+    const turnRollHtml = showTurnRoll
+      ? "<div class='journal-control-row'><span class='journal-roll-banner'>New turn roll: " +
+        state.rollAndGroup.dice.join(", ") +
+        "</span></div>"
+      : "";
     if (!selectedGroupKey) {
-      controlsHtml = '<div class="journal-control-row journal-control-row--prominent">' + groupButtons + "</div>";
+      controlsHtml =
+        turnRollHtml +
+        '<div class="journal-control-row journal-control-row--prominent">' + groupButtons + "</div>";
     } else if (!selectedJournalId) {
       controlsHtml =
+        turnRollHtml +
         '<div class="journal-control-row">' +
         '<span class="journal-chip journal-chip--active">' +
         (options.find((option) => option.key === selectedGroupKey)?.label || selectedGroupKey) +
@@ -417,6 +440,7 @@
         "<div class='journal-control-row'><span class='journal-muted'>Click a journal cell.</span></div>";
     } else {
       controlsHtml =
+        turnRollHtml +
         '<div class="journal-control-row">' +
         '<span class="journal-chip journal-chip--active">' +
         (options.find((option) => option.key === selectedGroupKey)?.label || selectedGroupKey) +
@@ -554,6 +578,8 @@
           })
           .join("");
         const mechanismLines = renderWorkshopMechanismLines(state, player, workshop.id);
+        const workshopIdeas = getWorkshopIdeasForRender(workshop);
+        const ideasLayer = renderWorkshopIdeasLayer(workshopIdeas);
         return (
           '<article class="workshop-card">' +
           "<h3>" +
@@ -566,6 +592,9 @@
           '<div class="workshop-grid-lines">' +
           mechanismLines +
           "</div>" +
+          '<div class="workshop-ideas-layer">' +
+          ideasLayer +
+          "</div>" +
           '<div class="workshop-grid">' +
           grid +
           "</div>" +
@@ -575,6 +604,49 @@
       })
       .join("");
     container.innerHTML = cardsHtml;
+  }
+
+  function getWorkshopIdeasForRender(workshop) {
+    const currentIdeas = Array.isArray(workshop.ideas) ? workshop.ideas : [];
+    if (
+      typeof roundEngineService.getWorkshopIdeaAnchors !== "function" ||
+      currentIdeas.length > 0
+    ) {
+      return currentIdeas;
+    }
+    const fallbackAnchors = roundEngineService.getWorkshopIdeaAnchors(workshop.id);
+    return fallbackAnchors.map((anchor, index) => ({
+      id: workshop.id + "-I" + String(index + 1),
+      row: Number(anchor.row),
+      col: Number(anchor.col),
+      status: "locked",
+      unlockedAtTurn: null,
+      unlockedAtDay: null,
+    }));
+  }
+
+  function renderWorkshopIdeasLayer(ideas) {
+    if (!Array.isArray(ideas) || ideas.length === 0) {
+      return "";
+    }
+    return ideas
+      .map((idea) => {
+        const topPercent = ((Number(idea.row) + 1) / 5) * 100;
+        const leftPercent = ((Number(idea.col) + 1) / 5) * 100;
+        const unlocked = idea.status === "unlocked";
+        return (
+          '<span class="workshop-idea' +
+          (unlocked ? " workshop-idea--unlocked" : "") +
+          '" title="' +
+          (unlocked ? "Idea unlocked" : "Idea locked") +
+          '" style="top:' +
+          String(topPercent) +
+          "%;left:" +
+          String(leftPercent) +
+          '%;">💡</span>'
+        );
+      })
+      .join("");
   }
 
   function renderWorkshopMechanismLines(state, player, workshopId) {
@@ -760,15 +832,28 @@
         )
         .join("");
 
+      const ideaStatus = String(journal.ideaStatus || "available");
+      const ideaBadgeClass =
+        ideaStatus === "completed"
+          ? " journal-idea-badge--completed"
+          : ideaStatus === "lost"
+            ? " journal-idea-badge--lost"
+            : "";
+
       return (
         '<article class="journal-card' +
         (isJournalLockedOut ? " journal-card--disabled" : "") +
         '">' +
-        "<h3>" +
+        '<h3 class="journal-title">' +
+        "<span>" +
         journal.id +
-        " (💡 Idea: " +
-        journal.ideaStatus +
-        ")" +
+        "</span>" +
+        '<span class="journal-idea-status">(' +
+        '<span class="journal-idea-badge' +
+        ideaBadgeClass +
+        '">💡</span> Idea: ' +
+        ideaStatus +
+        ")</span>" +
         "</h3>" +
         '<div class="journal-layout">' +
         '<div class="journal-column-wrenches">' +

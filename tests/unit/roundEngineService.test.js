@@ -368,6 +368,23 @@ test('RoundEngineService excludes journaling group from workshop options', () =>
   assert.equal(options[0].key, 'group-1');
 });
 
+test('RoundEngineService allows the same number in workshop after eureka journaling', () => {
+  const harness = createHarness({}, () => [1, 2, 3, 4, 5]);
+  harness.engine.initializePlayers(['P1']);
+  harness.engine.ensureJournalRoll();
+  harness.engine.selectJournalingGroup('P1', 'eureka-2');
+  harness.engine.selectJournal('P1', 'J1');
+  harness.engine.selectActiveJournalNumber('P1', 3);
+  harness.engine.placeJournalNumber('P1', 0, 0);
+  harness.engine.advancePhase();
+
+  const options = harness.engine.getWorkshoppingOptions('P1');
+  const includesThree = options.some(
+    (option) => option.values.length === 1 && option.values[0] === 3,
+  );
+  assert.equal(includesThree, true);
+});
+
 test('RoundEngineService applies workshop selection per clicked part and locks workshop', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
@@ -462,4 +479,60 @@ test('RoundEngineService finish building spends wrenches and enforces once per t
   const second = harness.engine.finishBuildingMechanism('P1');
   assert.equal(second.ok, false);
   assert.equal(second.reason, 'already_built_this_turn');
+});
+
+test('RoundEngineService unlocks workshop idea when one mechanism covers all four surrounding parts', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  const workshop = p1.workshops.find((item) => item.id === 'W1');
+  workshop.cells[0][1].circled = true;
+  workshop.cells[0][2].circled = true;
+  workshop.cells[1][1].circled = true;
+  workshop.cells[1][2].circled = true;
+  harness.engine.gameStateService.update({ players: state.players });
+
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 1);
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 2);
+  harness.engine.updateMechanismDraft('P1', 'W1', 1, 2);
+  harness.engine.updateMechanismDraft('P1', 'W1', 1, 1);
+  const built = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(built.ok, true);
+
+  const after = harness.getState();
+  const updatedWorkshop = after.players
+    .find((player) => player.id === 'P1')
+    .workshops.find((item) => item.id === 'W1');
+  const unlocked = updatedWorkshop.ideas.find((idea) => idea.row === 0 && idea.col === 1);
+  assert.equal(unlocked.status, 'unlocked');
+});
+
+test('RoundEngineService keeps workshop idea locked when mechanism misses one surrounding part', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  const workshop = p1.workshops.find((item) => item.id === 'W1');
+  workshop.cells[0][1].circled = true;
+  workshop.cells[0][2].circled = true;
+  workshop.cells[1][2].circled = true;
+  harness.engine.gameStateService.update({ players: state.players });
+
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 1);
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 2);
+  harness.engine.updateMechanismDraft('P1', 'W1', 1, 2);
+  const built = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(built.ok, true);
+
+  const after = harness.getState();
+  const updatedWorkshop = after.players
+    .find((player) => player.id === 'P1')
+    .workshops.find((item) => item.id === 'W1');
+  const stillLocked = updatedWorkshop.ideas.find((idea) => idea.row === 0 && idea.col === 1);
+  assert.equal(stillLocked.status, 'locked');
 });
