@@ -13,34 +13,22 @@ test('bootstrap wires round controls and reset action', () => {
   const loggerEntries = [];
   let resetCalled = false;
   const uiState = {
-    day: '',
-    turn: '',
-    phase: '',
-    status: '',
-    p1: '',
     seed: '',
     seedInputValue: '',
+    footerHint: '',
+    footerBreadcrumb: '',
   };
 
   globalThis.document = {
     getElementById(id) {
-      if (id === 'state-day') {
-        return { set textContent(value) { uiState.day = value; } };
-      }
-      if (id === 'state-turn') {
-        return { set textContent(value) { uiState.turn = value; } };
-      }
-      if (id === 'state-phase') {
-        return { set textContent(value) { uiState.phase = value; } };
-      }
-      if (id === 'state-status') {
-        return { set textContent(value) { uiState.status = value; } };
-      }
-      if (id === 'state-p1-journals') {
-        return { set textContent(value) { uiState.p1 = value; } };
-      }
       if (id === 'state-seed') {
         return { set textContent(value) { uiState.seed = value; } };
+      }
+      if (id === 'footer-hint') {
+        return { set textContent(value) { uiState.footerHint = value; } };
+      }
+      if (id === 'footer-breadcrumb') {
+        return { set textContent(value) { uiState.footerBreadcrumb = value; } };
       }
       if (id === 'seed-input') {
         return {
@@ -52,7 +40,17 @@ test('bootstrap wires round controls and reset action', () => {
           },
         };
       }
+      if (id === 'journal-controls') {
+        return {
+          style: {},
+          set innerHTML(_value) {},
+          addEventListener(eventName, callback) {
+            listeners[id + ':' + eventName] = callback;
+          },
+        };
+      }
       return {
+        style: {},
         addEventListener(eventName, callback) {
           listeners[id + ':' + eventName] = callback;
         },
@@ -126,6 +124,9 @@ test('bootstrap wires round controls and reset action', () => {
         },
         roundEngineService: {
           initializePlayers(_playerIds) {},
+          getPhases() {
+            return ['roll_and_group_dice', 'journal', 'workshop', 'build', 'invent'];
+          },
           getJournalingOptions() {
             return [];
           },
@@ -166,19 +167,16 @@ test('bootstrap wires round controls and reset action', () => {
 
   assert.equal(loggerCalls.length, 2);
   assert.equal(loggerCalls[0].message, 'Logging system initialized');
-  assert.equal(uiState.day, 'Friday');
-  assert.equal(uiState.phase, 'roll_and_group_dice');
   assert.equal(uiState.seed, 'default-seed');
+  assert.ok(uiState.footerBreadcrumb.includes('Friday'));
 
   listeners['advance-phase:click']();
-  listeners['p1-add-journal:click']();
   uiState.seedInputValue = 'abc123';
   listeners['set-seed:click']();
   listeners['reset-game:click']();
 
   const messages = loggerCalls.map((entry) => entry.message);
   assert.ok(messages.includes('Phase advanced'));
-  assert.ok(messages.includes('Journal completion updated'));
   assert.ok(messages.includes('RNG seed updated'));
   assert.ok(messages.includes('Game reset to default state'));
   assert.equal(resetCalled, true);

@@ -41,6 +41,90 @@
     action();
   }
 
+  function canAdvancePhase(state) {
+    if (state.gameStatus === "completed") {
+      return false;
+    }
+    if (state.phase !== "journal") {
+      return true;
+    }
+    if (state.rollAndGroup?.outcomeType === "quantum_leap") {
+      return true;
+    }
+    const selection = state.journalSelections?.[activePlayerId];
+    if (!selection?.selectedGroupKey) {
+      return false;
+    }
+    return Number(selection.placementsThisTurn || 0) >= 1;
+  }
+
+  function getFooterHint(state) {
+    if (state.gameStatus === "completed") {
+      return "Game completed.";
+    }
+
+    if (state.phase === "roll_and_group_dice") {
+      return "Roll and group dice.";
+    }
+
+    if (state.phase === "journal") {
+      if (state.rollAndGroup?.outcomeType === "quantum_leap") {
+        return "Quantum Leap: journaling skipped; continue.";
+      }
+      const selection = state.journalSelections?.[activePlayerId];
+      if (!selection?.selectedGroupKey) {
+        return "Choose journaling group.";
+      }
+      if (!selection?.selectedJournalId) {
+        return "Choose one journal for this turn.";
+      }
+      if (Number(selection.placementsThisTurn || 0) < 1) {
+        return "Place at least one number in the selected journal.";
+      }
+      return "You can place more numbers or continue.";
+    }
+
+    if (state.phase === "workshop") {
+      return "Workshop phase.";
+    }
+
+    if (state.phase === "build") {
+      return "Build phase.";
+    }
+
+    return "Invent phase.";
+  }
+
+  function getNextPhaseLabel(state) {
+    if (state.gameStatus === "completed") {
+      return "Game Completed";
+    }
+    const phaseLabels = {
+      roll_and_group_dice: "Roll & Go to Journaling",
+      journal: "Go to Workshopping",
+      workshop: "Go to Build",
+      build: "Go to Invent",
+      invent: "End Turn",
+    };
+    return phaseLabels[state.phase] || "Next Phase";
+  }
+
+  function renderPhaseBreadcrumb(currentPhase) {
+    const breadcrumb = document.getElementById("footer-breadcrumb");
+    if (!breadcrumb) {
+      return;
+    }
+    const phases = roundEngineService.getPhases();
+    const state = roundEngineService.getState();
+    const currentDay = state.currentDay || "Friday";
+    const text = [currentDay]
+      .concat(
+        phases.map((phase) => (phase === currentPhase ? "[" + phase.replaceAll("_", " ") + "]" : phase.replaceAll("_", " "))),
+      )
+      .join(" > ");
+    breadcrumb.textContent = text;
+  }
+
   function generateRandomSeed() {
     return "seed-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
@@ -56,20 +140,19 @@
       ? rollState.groups.map((group) => "[" + group.join(", ") + "]").join(" ")
       : "-";
 
-    document.getElementById("state-day").textContent = state.currentDay;
-    document.getElementById("state-turn").textContent = String(state.turnNumber);
-    document.getElementById("state-phase").textContent = state.phase;
-    document.getElementById("state-status").textContent = state.gameStatus;
-    document.getElementById("state-p1-journals").textContent = String(
-      p1 ? p1.completedJournals : 0,
-    );
-    document.getElementById("state-last-roll").textContent = rollDisplay;
-    document.getElementById("state-roll-outcome").textContent = rollState.outcomeType || "-";
-    document.getElementById("state-roll-groups").textContent = groupDisplay;
     document.getElementById("state-seed").textContent = state.rngSeed || "default-seed";
+    document.getElementById("footer-hint").textContent = getFooterHint(state);
+    renderPhaseBreadcrumb(state.phase);
     const seedInput = document.getElementById("seed-input");
     if (seedInput && globalScope.document.activeElement !== seedInput) {
       seedInput.value = state.rngSeed || "default-seed";
+    }
+    const advanceButton = document.getElementById("advance-phase");
+    advanceButton.textContent = getNextPhaseLabel(state);
+    advanceButton.disabled = !canAdvancePhase(state);
+    const undoButton = document.getElementById("undo-action");
+    if (undoButton) {
+      undoButton.disabled = undoStack.length === 0;
     }
     renderJournalControls(state, p1);
     renderJournals(state, p1);
@@ -78,6 +161,14 @@
   function renderJournalControls(state, player) {
     const controls = document.getElementById("journal-controls");
     if (!controls) {
+      return;
+    }
+
+    if (state.phase !== "journal") {
+      controls.innerHTML = "";
+      if (controls.style) {
+        controls.style.display = "none";
+      }
       return;
     }
 
@@ -106,25 +197,7 @@
           .join("")
       : "<span class='journal-muted'>No group choices available.</span>";
 
-    const journalButtons = selectedGroupKey && player?.journals
-      ? player.journals
-          .map(
-            (journal) =>
-              '<button type="button" class="journal-chip' +
-              (journal.id === selectedJournalId ? " journal-chip--active" : "") +
-              (selectedJournalId && journal.id !== selectedJournalId ? " journal-chip--disabled" : "") +
-              '" data-action="select-journal" data-journal-id="' +
-              journal.id +
-              '" ' +
-              (selectedJournalId && journal.id !== selectedJournalId ? "disabled" : "") +
-              '">' +
-              journal.id +
-              "</button>",
-          )
-          .join("")
-      : "<span class='journal-muted'>Select a journaling group first.</span>";
-
-    const numberButtons = selectedJournalId && selection?.remainingNumbers?.length
+    const numberButtons = selection?.remainingNumbers?.length
       ? selection.remainingNumbers
           .map(
             (numberValue, index) =>
@@ -139,33 +212,51 @@
               "</button>",
           )
           .join("")
-      : "<span class='journal-muted'>Select a journal first.</span>";
+      : "<span class='journal-muted'>No numbers remaining.</span>";
 
-    let controlsHtml =
-      '<div class="journal-control-row"><strong>1) Journaling Group:</strong> ' +
-      groupButtons +
-      "</div>";
-
-    if (selectedGroupKey) {
-      controlsHtml +=
-        '<div class="journal-control-row"><strong>2) Journal:</strong> ' +
-        journalButtons +
-        "</div>";
+    if (state.rollAndGroup?.outcomeType === "quantum_leap") {
+      controls.innerHTML =
+        '<div class="journal-control-row"><strong>Journaling:</strong> ' +
+        "<span class='journal-muted'>Quantum Leap skips journaling.</span></div>";
+      if (controls.style) {
+        controls.style.display = "grid";
+      }
+      return;
     }
 
-    if (selectedJournalId) {
-      controlsHtml +=
-        '<div class="journal-control-row"><strong>3) Number:</strong> ' +
+    let controlsHtml = "";
+    if (!selectedGroupKey) {
+      controlsHtml =
+        '<div class="journal-control-row"><strong>Journaling Group</strong> ' + groupButtons + "</div>";
+    } else if (!selectedJournalId) {
+      controlsHtml =
+        '<div class="journal-control-row"><strong>Selected Group</strong> ' +
+        '<span class="journal-chip journal-chip--active">' +
+        (options.find((option) => option.key === selectedGroupKey)?.label || selectedGroupKey) +
+        "</span></div>" +
+        '<div class="journal-control-row"><strong>Number</strong> ' +
+        numberButtons +
+        "</div>" +
+        "<div class='journal-control-row'><span class='journal-muted'>Click a cell in the journal you want to use.</span></div>";
+    } else {
+      controlsHtml =
+        '<div class="journal-control-row"><strong>Selected</strong> ' +
+        '<span class="journal-chip journal-chip--active">' +
+        (options.find((option) => option.key === selectedGroupKey)?.label || selectedGroupKey) +
+        "</span>" +
+        '<span class="journal-chip journal-chip--active">' +
+        selectedJournalId +
+        "</span></div>" +
+        '<div class="journal-control-row"><strong>Number</strong> ' +
         numberButtons +
         "</div>";
     }
 
     controls.innerHTML = controlsHtml;
-
-    const undoButton = document.getElementById("undo-action");
-    if (undoButton) {
-      undoButton.disabled = undoStack.length === 0;
+    if (controls.style) {
+      controls.style.display = "grid";
     }
+
   }
 
   function renderJournals(state, player) {
@@ -188,6 +279,7 @@
       const activeJournalId = playerSelection?.selectedJournalId || "";
       const activeNumber = Number(playerSelection?.activeNumber);
       const hasActiveNumber = Number.isInteger(activeNumber);
+      const isJournalLockedOut = Boolean(activeJournalId) && activeJournalId !== journal.id;
       const cellsHtml = rows
         .map((row, rowIndex) =>
           row
@@ -201,12 +293,21 @@
               const isPreviousRoundEntry = Boolean(meta) && !isCurrentRoundEntry;
               const rightQuadrantBorder = columnIndex === 1 ? " journal-cell--q-right" : "";
               const bottomQuadrantBorder = rowIndex === 1 ? " journal-cell--q-bottom" : "";
-              const clickable = activeJournalId === journal.id ? " journal-cell--clickable" : "";
-              const shouldValidate = activeJournalId === journal.id && hasActiveNumber;
+              const clickable =
+                playerSelection?.selectedGroupKey && !isJournalLockedOut
+                  ? " journal-cell--clickable"
+                  : "";
+              const shouldValidate =
+                playerSelection?.selectedGroupKey &&
+                hasActiveNumber &&
+                !isJournalLockedOut;
               const validation = shouldValidate
                 ? roundEngineService.validateJournalPlacement(journal, rowIndex, columnIndex, activeNumber)
                 : { ok: true };
-              const isDisabled = shouldValidate && !validation.ok;
+              const isDisabled =
+                isJournalLockedOut ||
+                !playerSelection?.selectedGroupKey ||
+                (shouldValidate && !validation.ok);
               const disabledClass = isDisabled ? " journal-cell--disabled" : "";
               const roundClass = isCurrentRoundEntry
                 ? " journal-cell--current-round"
@@ -274,7 +375,9 @@
         .join("");
 
       return (
-        '<article class="journal-card">' +
+        '<article class="journal-card' +
+        (isJournalLockedOut ? " journal-card--disabled" : "") +
+        '">' +
         "<h3>" +
         journal.id +
         "</h3>" +
@@ -308,16 +411,6 @@
   document.getElementById("advance-phase").addEventListener("click", function onAdvancePhase() {
     runWithUndo(() => {
       roundEngineService.advancePhase();
-    });
-    renderState();
-  });
-
-  document.getElementById("p1-add-journal").addEventListener("click", function onAddJournal() {
-    runWithUndo(() => {
-      const state = roundEngineService.getState();
-      const p1 = (state.players || []).find((player) => player.id === activePlayerId);
-      const nextCount = Math.min(3, (p1 ? p1.completedJournals : 0) + 1);
-      roundEngineService.updatePlayerJournalCompletion(activePlayerId, nextCount);
     });
     renderState();
   });
@@ -367,14 +460,6 @@
       return;
     }
 
-    if (action === "select-journal") {
-      runWithUndo(() => {
-        roundEngineService.selectJournal(activePlayerId, target.getAttribute("data-journal-id"));
-      });
-      renderState();
-      return;
-    }
-
     if (action === "select-number") {
       runWithUndo(() => {
         roundEngineService.selectActiveJournalNumber(
@@ -410,8 +495,9 @@
 
     const rowIndex = Math.floor(index / 4);
     const columnIndex = index % 4;
+    const journalId = grid.getAttribute("data-journal-id");
     runWithUndo(() => {
-      roundEngineService.placeJournalNumber(activePlayerId, rowIndex, columnIndex);
+      roundEngineService.placeJournalNumber(activePlayerId, rowIndex, columnIndex, journalId);
     });
     renderState();
   });

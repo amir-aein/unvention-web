@@ -157,16 +157,33 @@
       return this.gameStateService.update({ journalSelections: selections });
     }
 
-    placeJournalNumber(playerId, rowIndex, columnIndex) {
+    placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
       const state = this.gameStateService.getState();
       const player = this.findPlayer(state, playerId);
       const selections = { ...(state.journalSelections || {}) };
       const playerSelection = selections[playerId];
-      if (!player || !playerSelection || !playerSelection.selectedJournalId) {
+      if (!player || !playerSelection) {
         return { ok: false, reason: "missing_selection", state };
       }
 
-      const journal = player.journals.find((item) => item.id === playerSelection.selectedJournalId);
+      const requestedJournalId = journalId || playerSelection.selectedJournalId;
+      if (!requestedJournalId) {
+        return { ok: false, reason: "missing_selection", state };
+      }
+
+      if (
+        playerSelection.selectedJournalId &&
+        playerSelection.selectedJournalId !== requestedJournalId
+      ) {
+        return { ok: false, reason: "journal_locked", state };
+      }
+
+      if (!playerSelection.selectedJournalId) {
+        playerSelection.selectedJournalId = requestedJournalId;
+        playerSelection.journalLocked = true;
+      }
+
+      const journal = player.journals.find((item) => item.id === requestedJournalId);
       if (!journal) {
         return { ok: false, reason: "invalid_journal", state };
       }
