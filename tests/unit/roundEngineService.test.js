@@ -13,7 +13,7 @@ function createHarness(initialState, diceRoller) {
     version: 1,
     currentDay: 'Friday',
     turnNumber: 1,
-    phase: 'roll_and_group_dice',
+    phase: 'journal',
     gameStatus: 'active',
     players: [],
     rngSeed: 'default-seed',
@@ -57,8 +57,8 @@ function createHarness(initialState, diceRoller) {
 test('RoundEngineService advances through standard phase order', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
+  harness.engine.ensureJournalRoll();
 
-  harness.engine.advancePhase();
   assert.equal(harness.getState().phase, 'journal');
   assert.equal(harness.getState().rollAndGroup.dice.length, 5);
 
@@ -78,7 +78,7 @@ test('RoundEngineService advances through standard phase order', () => {
 
   harness.engine.advancePhase();
   const afterTurn = harness.getState();
-  assert.equal(afterTurn.phase, 'roll_and_group_dice');
+  assert.equal(afterTurn.phase, 'journal');
   assert.equal(afterTurn.turnNumber, 2);
   assert.equal(afterTurn.currentDay, 'Friday');
 });
@@ -94,7 +94,7 @@ test('RoundEngineService ends Friday and starts Saturday when threshold reached'
 
   assert.equal(state.currentDay, 'Saturday');
   assert.equal(state.turnNumber, 2);
-  assert.equal(state.phase, 'roll_and_group_dice');
+  assert.equal(state.phase, 'journal');
   assert.equal(state.gameStatus, 'active');
 });
 
@@ -129,7 +129,7 @@ test('RoundEngineService completes game on Sunday threshold', () => {
 
 test('RoundEngineService detects two_groups roll pattern', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   const state = harness.getState();
 
   assert.equal(state.phase, 'journal');
@@ -139,7 +139,7 @@ test('RoundEngineService detects two_groups roll pattern', () => {
 
 test('RoundEngineService detects three_groups roll pattern', () => {
   const harness = createHarness({}, () => [2, 3, 3, 4, 4]);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   const state = harness.getState();
 
   assert.equal(state.rollAndGroup.outcomeType, 'three_groups');
@@ -148,7 +148,7 @@ test('RoundEngineService detects three_groups roll pattern', () => {
 
 test('RoundEngineService detects eureka roll pattern', () => {
   const harness = createHarness({}, () => [1, 2, 3, 4, 6]);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   const state = harness.getState();
 
   assert.equal(state.rollAndGroup.outcomeType, 'eureka');
@@ -157,7 +157,7 @@ test('RoundEngineService detects eureka roll pattern', () => {
 
 test('RoundEngineService detects quantum leap roll pattern', () => {
   const harness = createHarness({}, () => [4, 4, 4, 4, 4]);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   const state = harness.getState();
 
   assert.equal(state.rollAndGroup.outcomeType, 'quantum_leap');
@@ -167,12 +167,12 @@ test('RoundEngineService detects quantum leap roll pattern', () => {
 test('RoundEngineService produces deterministic rolls from seed', () => {
   const harnessA = createHarness();
   harnessA.engine.setSeed('alpha-seed');
-  harnessA.engine.advancePhase();
+  harnessA.engine.ensureJournalRoll();
   const firstRollA = harnessA.getState().rollAndGroup.dice;
 
   const harnessB = createHarness();
   harnessB.engine.setSeed('alpha-seed');
-  harnessB.engine.advancePhase();
+  harnessB.engine.ensureJournalRoll();
   const firstRollB = harnessB.getState().rollAndGroup.dice;
 
   assert.deepEqual(firstRollA, firstRollB);
@@ -198,7 +198,7 @@ test('RoundEngineService initializes players with default journals', () => {
 test('RoundEngineService requires journaling selection and placement before phase ends', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   assert.equal(harness.getState().phase, 'journal');
 
   harness.engine.advancePhase();
@@ -215,7 +215,7 @@ test('RoundEngineService requires journaling selection and placement before phas
 test('RoundEngineService blocks illegal journal placement conflicts', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   harness.engine.selectJournalingGroup('P1', 'group-0');
   harness.engine.selectJournal('P1', 'J1');
   harness.engine.selectActiveJournalNumber('P1', 5);
@@ -231,7 +231,7 @@ test('RoundEngineService blocks illegal journal placement conflicts', () => {
 test('RoundEngineService locks journaling group and journal after journal selection', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
-  harness.engine.advancePhase();
+  harness.engine.ensureJournalRoll();
   harness.engine.selectJournalingGroup('P1', 'group-0');
   harness.engine.selectJournal('P1', 'J1');
 
@@ -324,4 +324,49 @@ test('RoundEngineService stores cell metadata on journal placement', () => {
   const meta = state.players.find((player) => player.id === 'P1').journals.find((j) => j.id === 'J1').cellMeta[1][1];
   assert.equal(meta.placedAtTurn, 3);
   assert.equal(meta.placedAtDay, 'Saturday');
+});
+
+test('RoundEngineService excludes journaling group from workshop options', () => {
+  const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
+  harness.engine.initializePlayers(['P1']);
+  harness.engine.ensureJournalRoll();
+  harness.engine.selectJournalingGroup('P1', 'group-0');
+  harness.engine.selectJournal('P1', 'J1');
+  harness.engine.selectActiveJournalNumber('P1', 5);
+  harness.engine.placeJournalNumber('P1', 0, 0);
+  harness.engine.advancePhase();
+  assert.equal(harness.getState().phase, 'workshop');
+
+  const options = harness.engine.getWorkshoppingOptions('P1');
+  assert.equal(options.length, 1);
+  assert.equal(options[0].key, 'group-1');
+});
+
+test('RoundEngineService applies workshop selection per clicked part and locks workshop', () => {
+  const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
+  harness.engine.initializePlayers(['P1']);
+  harness.engine.ensureJournalRoll();
+  harness.engine.selectJournalingGroup('P1', 'group-0');
+  harness.engine.selectJournal('P1', 'J1');
+  harness.engine.selectActiveJournalNumber('P1', 5);
+  harness.engine.placeJournalNumber('P1', 0, 0);
+  harness.engine.advancePhase();
+  harness.engine.selectWorkshoppingGroup('P1', 'group-1');
+  harness.engine.selectActiveWorkshopNumber('P1', 1);
+  const result = harness.engine.placeWorkshopPart('P1', 'W2', 1, 0);
+  assert.equal(result.ok, true);
+
+  const locked = harness.engine.placeWorkshopPart('P1', 'W1', 4, 0);
+  assert.equal(locked.ok, false);
+  assert.equal(locked.reason, 'workshop_locked');
+
+  const state = harness.getState();
+  const workshop = state.players
+    .find((player) => player.id === 'P1')
+    .workshops.find((item) => item.id === 'W2');
+  const selection = state.workshopSelections.P1;
+  assert.equal(workshop.partsByNumber['1'].circled, 1);
+  assert.equal(selection.selectedWorkshopId, 'W2');
+  assert.equal(selection.workshopLocked, true);
+  assert.equal(workshop.partsByNumber['5'].circled, 0);
 });

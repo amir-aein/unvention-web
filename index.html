@@ -7,20 +7,27 @@
     <link rel="stylesheet" href="src/ui/vanilla/styles/main.css" />
   </head>
   <body>
-    <main class="app">
+    <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
+      <div class="new-game-card">
+        <h1>Unvention: International Exhibition</h1>
+        <label for="new-game-seed">Seed (optional)</label>
+        <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
+        <button id="start-new-game" type="button">New Game</button>
+      </div>
+    </section>
+    <main id="app-shell" class="app" style="display: none">
       <section class="workspace">
         <div class="workspace-head">
           <h1 class="workspace-title">Unvention: International Exhibition</h1>
-          <div class="seed-info">
-            <span><strong>Seed:</strong> <span id="state-seed">default-seed</span></span>
-            <input id="seed-input" type="text" placeholder="Set seed" />
-            <button id="set-seed" type="button">Apply Seed</button>
-          </div>
         </div>
 
         <section class="journals-panel" aria-label="Player journals">
           <h2>P1 Journals</h2>
           <div id="journals-container" class="journals-container"></div>
+        </section>
+        <section class="workshops-panel" aria-label="Player workshops">
+          <h2>P1 Workshops</h2>
+          <div id="workshops-container" class="workshops-container"></div>
         </section>
       </section>
 
@@ -41,15 +48,17 @@
         <ul id="log-list" class="log-list"></ul>
       </aside>
     </main>
-    <footer id="action-footer" class="action-footer" aria-label="Current actions">
-      <div class="action-footer__status">
-        <div id="footer-breadcrumb" class="action-footer__breadcrumb"></div>
-        <span id="footer-hint" class="action-footer__hint">Roll and group dice to begin.</span>
-      </div>
-      <div id="journal-controls" class="journal-controls journal-controls--footer"></div>
-      <div class="action-footer__actions">
-        <button id="undo-action" type="button">Undo</button>
-        <button id="advance-phase" type="button">Next Phase</button>
+    <footer id="action-footer" class="action-footer" aria-label="Current actions" style="display: none">
+      <div id="footer-breadcrumb" class="action-footer__breadcrumb"></div>
+      <div class="action-footer__body">
+        <div class="action-footer__left">
+          <span id="footer-hint" class="action-footer__hint">Roll and group dice to begin.</span>
+          <div id="journal-controls" class="journal-controls journal-controls--footer"></div>
+        </div>
+        <div class="action-footer__right">
+          <button id="advance-phase" type="button">Next Phase</button>
+          <button id="undo-action" type="button">Undo</button>
+        </div>
       </div>
     </footer>
     <script src="src/shared/logLevels.js"></script>

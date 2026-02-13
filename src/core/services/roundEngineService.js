@@ -2,7 +2,6 @@
   const root = globalScope.Unvention || (globalScope.Unvention = {});
 
   const PHASES = [
-    "roll_and_group_dice",
     "journal",
     "workshop",
     "build",
@@ -17,6 +16,44 @@
   };
   const JOURNAL_COUNT = 3;
   const JOURNAL_SIZE = 4;
+  const WORKSHOP_COUNT = 4;
+  const WORKSHOP_SIZE = 5;
+  const WORKSHOP_LAYOUTS = [
+    [
+      [5, 3, 5, 4, 2],
+      [6, 2, "?", 1, 6],
+      [3, 6, 4, 3, "?"],
+      ["?", 5, 1, 3, 1],
+      [1, 5, 2, 4, null],
+    ],
+    [
+      [4, 3, "?", 1, 5],
+      [1, 4, 5, 4, 3],
+      ["?", 2, 3, 6, 1],
+      [3, 6, 1, "?", 2],
+      [null, 5, 4, 2, 6],
+    ],
+    [
+      [2, 6, 1, 4, null],
+      [1, 5, "?", 3, 1],
+      [5, 2, 4, 5, "?"],
+      [3, "?", 5, 2, 6],
+      [6, 4, 2, 6, 3],
+    ],
+    [
+      [null, 4, 3, 2, 5],
+      ["?", 2, 6, "?", 3],
+      [6, 2, 1, 4, 6],
+      [4, 3, "?", 1, 2],
+      [1, 6, 5, 5, 4],
+    ],
+  ];
+
+  function getWorkshopLayoutsForSeed(_seed) {
+    // Intentionally fixed for now; later this can return a deterministic
+    // permutation based on seed without changing workshop consumers.
+    return WORKSHOP_LAYOUTS;
+  }
 
   class RoundEngineService {
     constructor(gameStateService, loggerService, diceRoller) {
@@ -61,6 +98,39 @@
         values: [...groupValues],
         source: { type: "group", index },
       }));
+    }
+
+    getWorkshoppingOptions(playerId) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "workshop") {
+        return [];
+      }
+      const rollState = state.rollAndGroup || {};
+      const outcomeType = rollState.outcomeType;
+      if (!outcomeType || outcomeType === "quantum_leap") {
+        return [];
+      }
+
+      const context = state.workshopPhaseContext?.[playerId] || {};
+      if (outcomeType === "eureka") {
+        const excludedNumber = Number(context.journalChosenNumber);
+        return [1, 2, 3, 4, 5, 6]
+          .filter((value) => !Number.isInteger(excludedNumber) || value !== excludedNumber)
+          .map((value, index) => ({
+            key: "workshop-eureka-" + String(index),
+            label: String(value),
+            values: [value],
+          }));
+      }
+
+      const groups = Array.isArray(rollState.groups) ? rollState.groups : [];
+      return groups
+        .map((groupValues, index) => ({
+          key: "group-" + String(index),
+          label: groupValues.join(", "),
+          values: [...groupValues],
+        }))
+        .filter((option) => option.key !== context.excludedGroupKey);
     }
 
     selectJournalingGroup(playerId, selectionKey) {
@@ -155,6 +225,131 @@
       playerSelection.activeNumber = value;
       selections[playerId] = playerSelection;
       return this.gameStateService.update({ journalSelections: selections });
+    }
+
+    selectWorkshoppingGroup(playerId, selectionKey) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "workshop") {
+        return state;
+      }
+      const options = this.getWorkshoppingOptions(playerId);
+      const selected = options.find((option) => option.key === selectionKey);
+      if (!selected) {
+        this.loggerService.logEvent("warn", "Invalid workshop group selection", {
+          playerId,
+          selectionKey,
+        });
+        return state;
+      }
+
+      const selections = { ...(state.workshopSelections || {}) };
+      const existing = selections[playerId] || {};
+      selections[playerId] = {
+        ...existing,
+        selectedGroupKey: selected.key,
+        selectedGroupValues: [...selected.values],
+        remainingNumbers: [...selected.values],
+        activeNumber: selected.values[0] || null,
+        selectedWorkshopId: existing.selectedWorkshopId || null,
+        workshopLocked: Boolean(existing.selectedWorkshopId),
+        placementsThisTurn: existing.placementsThisTurn || 0,
+      };
+      const updated = this.gameStateService.update({ workshopSelections: selections });
+      this.loggerService.logEvent("info", "Workshop group selected", {
+        playerId,
+        values: selected.values,
+      });
+      return updated;
+    }
+
+    selectActiveWorkshopNumber(playerId, numberValue) {
+      const state = this.gameStateService.getState();
+      const selections = { ...(state.workshopSelections || {}) };
+      const playerSelection = selections[playerId];
+      if (!playerSelection) {
+        return state;
+      }
+      const value = Number(numberValue);
+      if (!Array.isArray(playerSelection.remainingNumbers) || !playerSelection.remainingNumbers.includes(value)) {
+        return state;
+      }
+      playerSelection.activeNumber = value;
+      selections[playerId] = playerSelection;
+      return this.gameStateService.update({ workshopSelections: selections });
+    }
+
+    placeWorkshopPart(playerId, workshopId, rowIndex, columnIndex) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "workshop") {
+        return { ok: false, reason: "invalid_phase", state };
+      }
+      const selection = state.workshopSelections?.[playerId];
+      if (!selection?.selectedGroupValues?.length) {
+        return { ok: false, reason: "missing_selection", state };
+      }
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      const workshop = player.workshops.find((item) => item.id === workshopId);
+      if (!workshop) {
+        return { ok: false, reason: "invalid_workshop", state };
+      }
+
+      if (
+        selection.selectedWorkshopId &&
+        selection.selectedWorkshopId !== workshopId
+      ) {
+        return { ok: false, reason: "workshop_locked", state };
+      }
+
+      const activeNumber = Number(selection.activeNumber);
+      if (!Number.isInteger(activeNumber)) {
+        return { ok: false, reason: "missing_number", state };
+      }
+      if (!Array.isArray(selection.remainingNumbers) || !selection.remainingNumbers.includes(activeNumber)) {
+        return { ok: false, reason: "missing_number", state };
+      }
+
+      const row = workshop.cells?.[rowIndex];
+      const cell = row?.[columnIndex];
+      if (!cell || cell.kind === "empty") {
+        return { ok: false, reason: "out_of_bounds", state };
+      }
+      if (cell.circled) {
+        return { ok: false, reason: "already_circled", state };
+      }
+      if (cell.kind === "number" && cell.value !== activeNumber) {
+        return { ok: false, reason: "number_mismatch", state };
+      }
+
+      workshop.cells[rowIndex][columnIndex] = { ...cell, circled: true };
+      workshop.partsByNumber = this.countWorkshopPartsByNumber(workshop.cells);
+      workshop.lastWorkedAtTurn = state.turnNumber;
+      workshop.lastWorkedAtDay = state.currentDay;
+
+      const selections = { ...(state.workshopSelections || {}) };
+      selections[playerId] = {
+        ...selection,
+        selectedWorkshopId: workshopId,
+        workshopLocked: true,
+        remainingNumbers: this.removeSingleValue(selection.remainingNumbers, activeNumber),
+        placementsThisTurn: Number(selection.placementsThisTurn || 0) + 1,
+      };
+      selections[playerId].activeNumber = selections[playerId].remainingNumbers[0] || null;
+      const updatedPlayers = state.players.map((item) => (item.id === playerId ? player : item));
+      const updated = this.gameStateService.update({
+        players: updatedPlayers,
+        workshopSelections: selections,
+      });
+      this.loggerService.logEvent("info", "Workshop parts circled", {
+        playerId,
+        workshopId,
+        value: activeNumber,
+        rowIndex,
+        columnIndex,
+      });
+      return { ok: true, reason: null, state: updated };
     }
 
     placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
@@ -325,6 +520,9 @@
         journals: Array.from({ length: JOURNAL_COUNT }, (_item, index) =>
           this.createDefaultJournal(index + 1),
         ),
+        workshops: Array.from({ length: WORKSHOP_COUNT }, (_item, index) =>
+          this.createDefaultWorkshop(index + 1),
+        ),
       };
     }
 
@@ -339,6 +537,74 @@
         ideaStatus: "available",
         completionStatus: "incomplete",
       };
+    }
+
+    createDefaultWorkshop(workshopNumber) {
+      const state = this.gameStateService.getState();
+      const layouts = getWorkshopLayoutsForSeed(state.rngSeed);
+      const template = layouts[workshopNumber - 1] || layouts[0];
+      const cells = template.map((row) =>
+        row.map((token) => {
+          if (token === null) {
+            return {
+              kind: "empty",
+              value: null,
+              circled: false,
+            };
+          }
+          if (token === "?") {
+            return {
+              kind: "wild",
+              value: null,
+              circled: false,
+            };
+          }
+          return {
+            kind: "number",
+            value: Number(token),
+            circled: false,
+          };
+        }),
+      );
+      return {
+        id: "W" + String(workshopNumber),
+        size: WORKSHOP_SIZE,
+        cells,
+        partsByNumber: this.countWorkshopPartsByNumber(cells),
+        lastWorkedAtTurn: null,
+        lastWorkedAtDay: null,
+      };
+    }
+
+    countWorkshopPartsByNumber(cells) {
+      const totals = {
+        "1": { total: 0, circled: 0 },
+        "2": { total: 0, circled: 0 },
+        "3": { total: 0, circled: 0 },
+        "4": { total: 0, circled: 0 },
+        "5": { total: 0, circled: 0 },
+        "6": { total: 0, circled: 0 },
+        wild: { total: 0, circled: 0 },
+      };
+      cells.forEach((row) => {
+        row.forEach((cell) => {
+          if (cell.kind === "number" && Number.isInteger(cell.value)) {
+            const key = String(cell.value);
+            totals[key].total += 1;
+            if (cell.circled) {
+              totals[key].circled += 1;
+            }
+            return;
+          }
+          if (cell.kind === "wild") {
+            totals.wild.total += 1;
+            if (cell.circled) {
+              totals.wild.circled += 1;
+            }
+          }
+        });
+      });
+      return totals;
     }
 
     createEmptyGrid(size) {
@@ -367,11 +633,9 @@
       }
 
       if (phaseIndex < PHASES.length - 1) {
-        if (state.phase === "roll_and_group_dice") {
-          return this.executeRollAndGroup(state);
-        }
         if (state.phase === "journal") {
-          return this.completeJournalPhase(state);
+          const preparedState = this.ensureJournalRoll(state);
+          return this.completeJournalPhase(preparedState);
         }
 
         const nextPhase = PHASES[phaseIndex + 1];
@@ -416,9 +680,15 @@
 
       const clearedSelections = { ...(stateAtJournalPhase.journalSelections || {}) };
       delete clearedSelections[playerId];
+      const workshopContext = { ...(stateAtJournalPhase.workshopPhaseContext || {}) };
+      workshopContext[playerId] = {
+        excludedGroupKey: selection.selectedGroupKey || null,
+        journalChosenNumber: Number(selection.selectedGroupValues?.[0] ?? NaN),
+      };
       const updated = this.gameStateService.update({
         phase: "workshop",
         journalSelections: clearedSelections,
+        workshopPhaseContext: workshopContext,
       });
       this.loggerService.logEvent("info", "Journal phase completed", {
         playerId,
@@ -426,26 +696,34 @@
       return updated;
     }
 
-    executeRollAndGroup(stateAtRollPhase) {
-      if (stateAtRollPhase.phase !== "roll_and_group_dice") {
-        this.loggerService.logEvent("warn", "Cannot roll dice outside roll phase", {
-          phase: stateAtRollPhase.phase,
-        });
-        return stateAtRollPhase;
+    ensureJournalRoll(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      if (state.phase !== "journal") {
+        return state;
       }
+      const alreadyRolledForTurn =
+        state.rollAndGroup?.rolledAtTurn === state.turnNumber &&
+        state.rollAndGroup?.rolledAtDay === state.currentDay &&
+        Array.isArray(state.rollAndGroup?.dice) &&
+        state.rollAndGroup.dice.length === 5;
+      if (alreadyRolledForTurn) {
+        return state;
+      }
+      return this.rollForJournalPhase(state);
+    }
 
-      const rollResult = this.rollFiveDice(stateAtRollPhase);
+    rollForJournalPhase(stateAtJournalPhase) {
+      const rollResult = this.rollFiveDice(stateAtJournalPhase);
       const dice = rollResult.dice;
       const analysis = this.analyzeDice(dice);
       const updated = this.gameStateService.update({
-        phase: "journal",
         rngState: rollResult.nextRngState,
         rollAndGroup: {
           dice: [...dice],
           outcomeType: analysis.outcomeType,
           groups: analysis.groups,
-          rolledAtTurn: stateAtRollPhase.turnNumber,
-          rolledAtDay: stateAtRollPhase.currentDay,
+          rolledAtTurn: stateAtJournalPhase.turnNumber,
+          rolledAtDay: stateAtJournalPhase.currentDay,
         },
       });
 
@@ -583,7 +861,11 @@
           currentDay: dayResolution.nextDay,
           turnNumber: stateAtEndPhase.turnNumber + 1,
           phase: PHASES[0],
+          journalSelections: {},
+          workshopSelections: {},
+          workshopPhaseContext: {},
         });
+        const prepared = this.ensureJournalRoll(progressed);
 
         this.loggerService.logEvent("info", "Day ended", {
           day: dayResolution.endedDay,
@@ -597,24 +879,27 @@
         }
 
         this.loggerService.logEvent("info", "New day started", {
-          day: progressed.currentDay,
-          turnNumber: progressed.turnNumber,
-          phase: progressed.phase,
+          day: prepared.currentDay,
+          turnNumber: prepared.turnNumber,
+          phase: prepared.phase,
         });
-        return progressed;
+        return prepared;
       }
 
       const nextTurn = this.gameStateService.update({
         turnNumber: stateAtEndPhase.turnNumber + 1,
         phase: PHASES[0],
         journalSelections: {},
+        workshopSelections: {},
+        workshopPhaseContext: {},
       });
+      const prepared = this.ensureJournalRoll(nextTurn);
 
       this.loggerService.logEvent("info", "Turn completed", {
-        day: nextTurn.currentDay,
+        day: prepared.currentDay,
         turnNumber: stateAtEndPhase.turnNumber,
       });
-      return nextTurn;
+      return prepared;
     }
 
     resolveDayTransition(state) {

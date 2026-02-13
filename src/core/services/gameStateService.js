@@ -52,12 +52,15 @@
         version: 1,
         currentDay: "Friday",
         turnNumber: 1,
-        phase: "roll_and_group_dice",
+        phase: "journal",
         gameStatus: "active",
+        gameStarted: false,
         players: [],
         rngSeed: "default-seed",
         rngState: 3288473048,
         journalSelections: {},
+        workshopSelections: {},
+        workshopPhaseContext: {},
         rollAndGroup: {
           dice: [],
           outcomeType: null,
@@ -79,6 +82,9 @@
       if (!Array.isArray(merged.players)) {
         merged.players = [];
       }
+      if (typeof merged.gameStarted !== "boolean") {
+        merged.gameStarted = merged.players.length > 0;
+      }
       if (typeof merged.rngSeed !== "string" || merged.rngSeed.length === 0) {
         merged.rngSeed = defaults.rngSeed;
       }
@@ -87,6 +93,12 @@
       }
       if (!merged.journalSelections || typeof merged.journalSelections !== "object") {
         merged.journalSelections = {};
+      }
+      if (!merged.workshopSelections || typeof merged.workshopSelections !== "object") {
+        merged.workshopSelections = {};
+      }
+      if (!merged.workshopPhaseContext || typeof merged.workshopPhaseContext !== "object") {
+        merged.workshopPhaseContext = {};
       }
       if (!merged.rollAndGroup || typeof merged.rollAndGroup !== "object") {
         merged.rollAndGroup = defaults.rollAndGroup;
