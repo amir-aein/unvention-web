@@ -15,6 +15,8 @@
     Saturday: 2,
     Sunday: 3,
   };
+  const JOURNAL_COUNT = 3;
+  const JOURNAL_SIZE = 4;
 
   class RoundEngineService {
     constructor(gameStateService, loggerService, diceRoller) {
@@ -29,6 +31,235 @@
 
     getPhases() {
       return [...PHASES];
+    }
+
+    getJournalingOptions(playerId) {
+      const state = this.gameStateService.getState();
+      const rollState = state.rollAndGroup || {};
+      const outcomeType = rollState.outcomeType;
+      if (!outcomeType) {
+        return [];
+      }
+
+      if (outcomeType === "eureka") {
+        return [1, 2, 3, 4, 5, 6].map((value, index) => ({
+          key: "eureka-" + String(index),
+          label: String(value),
+          values: [value],
+          source: { type: "eureka", value },
+        }));
+      }
+
+      if (outcomeType === "quantum_leap") {
+        return [];
+      }
+
+      const groups = Array.isArray(rollState.groups) ? rollState.groups : [];
+      return groups.map((groupValues, index) => ({
+        key: "group-" + String(index),
+        label: groupValues.join(", "),
+        values: [...groupValues],
+        source: { type: "group", index },
+      }));
+    }
+
+    selectJournalingGroup(playerId, selectionKey) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "journal") {
+        return state;
+      }
+
+      const existingSelection = state.journalSelections?.[playerId];
+      if (
+        existingSelection &&
+        existingSelection.selectedJournalId &&
+        existingSelection.selectedGroupKey !== selectionKey
+      ) {
+        this.loggerService.logEvent("warn", "Journaling group is locked after journal selection", {
+          playerId,
+          selectedJournalId: existingSelection.selectedJournalId,
+        });
+        return state;
+      }
+
+      const options = this.getJournalingOptions(playerId);
+      const selected = options.find((option) => option.key === selectionKey);
+      if (!selected) {
+        this.loggerService.logEvent("warn", "Invalid journaling group selection", {
+          playerId,
+          selectionKey,
+        });
+        return state;
+      }
+
+      const selections = { ...(state.journalSelections || {}) };
+      selections[playerId] = {
+        selectedGroupKey: selected.key,
+        selectedGroupValues: [...selected.values],
+        remainingNumbers: [...selected.values],
+        selectedJournalId: null,
+        activeNumber: selected.values[0] || null,
+        placementsThisTurn: 0,
+        journalLocked: false,
+      };
+
+      const updated = this.gameStateService.update({
+        journalSelections: selections,
+      });
+      this.loggerService.logEvent("info", "Journaling group selected", {
+        playerId,
+        values: selected.values,
+      });
+      return updated;
+    }
+
+    selectJournal(playerId, journalId) {
+      const state = this.gameStateService.getState();
+      const selections = { ...(state.journalSelections || {}) };
+      const playerSelection = selections[playerId];
+      if (!playerSelection) {
+        return state;
+      }
+
+      if (!playerSelection.selectedGroupKey) {
+        return state;
+      }
+
+      if (playerSelection.selectedJournalId && playerSelection.selectedJournalId !== journalId) {
+        this.loggerService.logEvent("warn", "Journal selection is locked for this turn", {
+          playerId,
+          selectedJournalId: playerSelection.selectedJournalId,
+        });
+        return state;
+      }
+
+      playerSelection.selectedJournalId = journalId;
+      playerSelection.journalLocked = true;
+      selections[playerId] = playerSelection;
+      return this.gameStateService.update({ journalSelections: selections });
+    }
+
+    selectActiveJournalNumber(playerId, numberValue) {
+      const state = this.gameStateService.getState();
+      const selections = { ...(state.journalSelections || {}) };
+      const playerSelection = selections[playerId];
+      if (!playerSelection) {
+        return state;
+      }
+
+      const value = Number(numberValue);
+      if (!playerSelection.remainingNumbers.includes(value)) {
+        return state;
+      }
+
+      playerSelection.activeNumber = value;
+      selections[playerId] = playerSelection;
+      return this.gameStateService.update({ journalSelections: selections });
+    }
+
+    placeJournalNumber(playerId, rowIndex, columnIndex) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      const selections = { ...(state.journalSelections || {}) };
+      const playerSelection = selections[playerId];
+      if (!player || !playerSelection || !playerSelection.selectedJournalId) {
+        return { ok: false, reason: "missing_selection", state };
+      }
+
+      const journal = player.journals.find((item) => item.id === playerSelection.selectedJournalId);
+      if (!journal) {
+        return { ok: false, reason: "invalid_journal", state };
+      }
+
+      const value = Number(playerSelection.activeNumber);
+      const remainingNumbers = Array.isArray(playerSelection.remainingNumbers)
+        ? playerSelection.remainingNumbers
+        : [];
+
+      if (!Number.isInteger(value) || value < 1 || value > 6) {
+        return { ok: false, reason: "missing_number", state };
+      }
+
+      if (!remainingNumbers.includes(value)) {
+        return { ok: false, reason: "missing_number", state };
+      }
+
+      const validation = this.validateJournalPlacement(journal, rowIndex, columnIndex, value);
+      if (!validation.ok) {
+        this.loggerService.logEvent("warn", "Illegal journal placement blocked", {
+          playerId,
+          journalId: journal.id,
+          rowIndex,
+          columnIndex,
+          value,
+          reason: validation.reason,
+        });
+        return { ok: false, reason: validation.reason, state };
+      }
+
+      journal.grid[rowIndex][columnIndex] = value;
+      if (!Array.isArray(journal.cellMeta) || !Array.isArray(journal.cellMeta[rowIndex])) {
+        journal.cellMeta = this.createEmptyGrid(journal.size || 4);
+      }
+      journal.cellMeta[rowIndex][columnIndex] = {
+        placedAtTurn: state.turnNumber,
+        placedAtDay: state.currentDay,
+      };
+      this.updateWrenchesForJournal(journal);
+      playerSelection.remainingNumbers = this.removeSingleValue(playerSelection.remainingNumbers, value);
+      playerSelection.activeNumber = playerSelection.remainingNumbers[0] || null;
+      playerSelection.placementsThisTurn += 1;
+      selections[playerId] = playerSelection;
+      journal.completionStatus = this.isJournalComplete(journal) ? "complete" : "incomplete";
+      player.completedJournals = player.journals.filter((item) => this.isJournalComplete(item)).length;
+
+      const updatedPlayers = state.players.map((item) => (item.id === player.id ? player : item));
+      const updated = this.gameStateService.update({
+        players: updatedPlayers,
+        journalSelections: selections,
+      });
+
+      this.loggerService.logEvent("info", "Journal number placed", {
+        playerId,
+        journalId: journal.id,
+        rowIndex,
+        columnIndex,
+        value,
+      });
+
+      return { ok: true, reason: null, state: updated };
+    }
+
+    initializePlayers(playerIds) {
+      const ids = Array.isArray(playerIds) ? playerIds : [];
+      if (ids.length === 0) {
+        return this.gameStateService.getState();
+      }
+
+      const state = this.gameStateService.getState();
+      const players = Array.isArray(state.players) ? [...state.players] : [];
+      let changed = false;
+
+      ids.forEach((id) => {
+        const playerId = String(id || "").trim();
+        if (!playerId) {
+          return;
+        }
+        if (!players.some((player) => player.id === playerId)) {
+          players.push(this.createDefaultPlayer(playerId));
+          changed = true;
+        }
+      });
+
+      if (!changed) {
+        return state;
+      }
+
+      const updated = this.gameStateService.update({ players });
+      this.loggerService.logEvent("info", "Players initialized", {
+        playerIds: ids,
+      });
+      return updated;
     }
 
     setSeed(seedInput) {
@@ -57,10 +288,9 @@
           completedJournals: safeCompleted,
         };
       } else {
-        players.push({
-          id: playerId,
-          completedJournals: safeCompleted,
-        });
+        const player = this.createDefaultPlayer(playerId);
+        player.completedJournals = safeCompleted;
+        players.push(player);
       }
 
       const updated = this.gameStateService.update({ players });
@@ -69,6 +299,33 @@
         completedJournals: safeCompleted,
       });
       return updated;
+    }
+
+    createDefaultPlayer(playerId) {
+      return {
+        id: playerId,
+        completedJournals: 0,
+        journals: Array.from({ length: JOURNAL_COUNT }, (_item, index) =>
+          this.createDefaultJournal(index + 1),
+        ),
+      };
+    }
+
+    createDefaultJournal(journalNumber) {
+      return {
+        id: "J" + String(journalNumber),
+        size: JOURNAL_SIZE,
+        grid: this.createEmptyGrid(JOURNAL_SIZE),
+        cellMeta: this.createEmptyGrid(JOURNAL_SIZE),
+        rowWrenches: Array.from({ length: JOURNAL_SIZE }, () => "available"),
+        columnWrenches: Array.from({ length: JOURNAL_SIZE }, () => "available"),
+        ideaStatus: "available",
+        completionStatus: "incomplete",
+      };
+    }
+
+    createEmptyGrid(size) {
+      return Array.from({ length: size }, () => Array.from({ length: size }, () => null));
     }
 
     advancePhase() {
@@ -96,6 +353,9 @@
         if (state.phase === "roll_and_group_dice") {
           return this.executeRollAndGroup(state);
         }
+        if (state.phase === "journal") {
+          return this.completeJournalPhase(state);
+        }
 
         const nextPhase = PHASES[phaseIndex + 1];
         const updated = this.gameStateService.update({ phase: nextPhase });
@@ -109,6 +369,44 @@
       }
 
       return this.completeTurn(state);
+    }
+
+    completeJournalPhase(stateAtJournalPhase) {
+      const playerId = "P1";
+      const rollOutcome = stateAtJournalPhase.rollAndGroup?.outcomeType;
+      if (rollOutcome === "quantum_leap") {
+        const updatedQuantum = this.gameStateService.update({ phase: "workshop" });
+        this.loggerService.logEvent("info", "Journal phase skipped due to Quantum Leap", {
+          playerId,
+        });
+        return updatedQuantum;
+      }
+
+      const selection = stateAtJournalPhase.journalSelections?.[playerId];
+      if (!selection || !selection.selectedGroupKey) {
+        this.loggerService.logEvent("warn", "Select a journaling group before continuing", {
+          playerId,
+        });
+        return stateAtJournalPhase;
+      }
+
+      if ((selection.placementsThisTurn || 0) < 1) {
+        this.loggerService.logEvent("warn", "Place at least one number before ending Journal phase", {
+          playerId,
+        });
+        return stateAtJournalPhase;
+      }
+
+      const clearedSelections = { ...(stateAtJournalPhase.journalSelections || {}) };
+      delete clearedSelections[playerId];
+      const updated = this.gameStateService.update({
+        phase: "workshop",
+        journalSelections: clearedSelections,
+      });
+      this.loggerService.logEvent("info", "Journal phase completed", {
+        playerId,
+      });
+      return updated;
     }
 
     executeRollAndGroup(stateAtRollPhase) {
@@ -292,6 +590,7 @@
       const nextTurn = this.gameStateService.update({
         turnNumber: stateAtEndPhase.turnNumber + 1,
         phase: PHASES[0],
+        journalSelections: {},
       });
 
       this.loggerService.logEvent("info", "Turn completed", {
@@ -366,6 +665,76 @@
         gameCompleted: false,
         finalDay: DAYS[nextDayIndex],
       };
+    }
+
+    findPlayer(state, playerId) {
+      const players = Array.isArray(state.players) ? state.players : [];
+      return players.find((player) => player.id === playerId);
+    }
+
+    validateJournalPlacement(journal, rowIndex, columnIndex, value) {
+      if (!journal.grid[rowIndex] || typeof journal.grid[rowIndex][columnIndex] === "undefined") {
+        return { ok: false, reason: "out_of_bounds" };
+      }
+      if (journal.grid[rowIndex][columnIndex] !== null) {
+        return { ok: false, reason: "cell_filled" };
+      }
+
+      const row = journal.grid[rowIndex];
+      if (row.includes(value)) {
+        return { ok: false, reason: "row_conflict" };
+      }
+
+      const columnValues = journal.grid.map((rowItem) => rowItem[columnIndex]);
+      if (columnValues.includes(value)) {
+        return { ok: false, reason: "column_conflict" };
+      }
+
+      const quadrantRowStart = Math.floor(rowIndex / 2) * 2;
+      const quadrantColumnStart = Math.floor(columnIndex / 2) * 2;
+      for (let rowOffset = 0; rowOffset < 2; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < 2; columnOffset += 1) {
+          const rowValue = journal.grid[quadrantRowStart + rowOffset][quadrantColumnStart + columnOffset];
+          if (rowValue === value) {
+            return { ok: false, reason: "quadrant_conflict" };
+          }
+        }
+      }
+
+      return { ok: true, reason: null };
+    }
+
+    removeSingleValue(values, target) {
+      const index = values.indexOf(target);
+      if (index < 0) {
+        return [...values];
+      }
+      return [...values.slice(0, index), ...values.slice(index + 1)];
+    }
+
+    updateWrenchesForJournal(journal) {
+      for (let rowIndex = 0; rowIndex < journal.grid.length; rowIndex += 1) {
+        if (
+          journal.rowWrenches[rowIndex] === "available" &&
+          journal.grid[rowIndex].every((cell) => cell !== null)
+        ) {
+          journal.rowWrenches[rowIndex] = "earned";
+        }
+      }
+
+      for (let columnIndex = 0; columnIndex < journal.grid[0].length; columnIndex += 1) {
+        if (journal.columnWrenches[columnIndex] !== "available") {
+          continue;
+        }
+        const columnComplete = journal.grid.every((row) => row[columnIndex] !== null);
+        if (columnComplete) {
+          journal.columnWrenches[columnIndex] = "earned";
+        }
+      }
+    }
+
+    isJournalComplete(journal) {
+      return journal.grid.every((row) => row.every((cell) => cell !== null));
     }
   }
 

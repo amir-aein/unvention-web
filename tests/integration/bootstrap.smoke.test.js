@@ -106,11 +106,18 @@ test('bootstrap wires round controls and reset action', () => {
           },
         },
         gameStateService: {
+          getState() {
+            return currentState;
+          },
           load() {
             return currentState;
           },
           update() {
             return {};
+          },
+          setState(nextState) {
+            Object.assign(currentState, nextState);
+            return currentState;
           },
           reset() {
             resetCalled = true;
@@ -118,6 +125,10 @@ test('bootstrap wires round controls and reset action', () => {
           },
         },
         roundEngineService: {
+          initializePlayers(_playerIds) {},
+          getJournalingOptions() {
+            return [];
+          },
           getState() {
             return currentState;
           },
@@ -139,6 +150,10 @@ test('bootstrap wires round controls and reset action', () => {
               context: { seed: currentState.rngSeed },
             });
           },
+          selectJournalingGroup() {},
+          selectJournal() {},
+          selectActiveJournalNumber() {},
+          placeJournalNumber() {},
         },
       };
     },

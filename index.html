@@ -30,12 +30,19 @@
           <input id="seed-input" type="text" placeholder="Enter seed" />
           <button id="set-seed" type="button">Set Seed</button>
         </div>
+
+        <section class="journals-panel" aria-label="Player journals">
+          <h2>P1 Journals</h2>
+          <div id="journal-controls" class="journal-controls"></div>
+          <div id="journals-container" class="journals-container"></div>
+        </section>
       </section>
 
       <aside class="log-sidebar" aria-label="Action log">
         <div class="log-header">
           <h2>Action Log</h2>
           <div class="log-header-actions">
+            <button id="undo-action" type="button">Undo</button>
             <button id="clear-log" type="button">Clear</button>
             <button id="reset-game" type="button">Reset Game</button>
           </div>

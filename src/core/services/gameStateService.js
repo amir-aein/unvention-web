@@ -35,6 +35,12 @@
       return this.getState();
     }
 
+    setState(nextState) {
+      this.state = this.mergeWithDefaults(nextState || {});
+      this.persist();
+      return this.getState();
+    }
+
     reset() {
       this.state = this.getDefaultState();
       this.persist();
@@ -51,6 +57,7 @@
         players: [],
         rngSeed: "default-seed",
         rngState: 3288473048,
+        journalSelections: {},
         rollAndGroup: {
           dice: [],
           outcomeType: null,
@@ -77,6 +84,9 @@
       }
       if (!Number.isInteger(merged.rngState)) {
         merged.rngState = defaults.rngState;
+      }
+      if (!merged.journalSelections || typeof merged.journalSelections !== "object") {
+        merged.journalSelections = {};
       }
       if (!merged.rollAndGroup || typeof merged.rollAndGroup !== "object") {
         merged.rollAndGroup = defaults.rollAndGroup;

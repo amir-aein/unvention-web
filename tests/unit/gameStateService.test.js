@@ -34,6 +34,7 @@ test('GameStateService loads, merges defaults, and persists updates', () => {
   assert.deepEqual(loaded.players, []);
   assert.equal(loaded.rngSeed, 'default-seed');
   assert.equal(Number.isInteger(loaded.rngState), true);
+  assert.deepEqual(loaded.journalSelections, {});
   assert.deepEqual(loaded.rollAndGroup.dice, []);
   assert.equal(loaded.rollAndGroup.outcomeType, null);
   assert.equal(loaded.logs.length, 1);
