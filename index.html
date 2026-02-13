@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unvention Web</title>
+    <link rel="stylesheet" href="src/css/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="workspace">
+        <h1>Unvention</h1>
+        <p>Core systems will be built here. Logging is active for visibility.</p>
+        <div class="demo-actions">
+          <button id="demo-info" type="button">Log Info Action</button>
+          <button id="demo-warn" type="button">Log Warning Action</button>
+          <button id="demo-error" type="button">Log Error Action</button>
+        </div>
+      </section>
+
+      <aside class="log-sidebar" aria-label="Action log">
+        <div class="log-header">
+          <h2>Action Log</h2>
+          <button id="clear-log" type="button">Clear</button>
+        </div>
+        <div class="log-filters">
+          <label><input type="checkbox" value="info" checked /> Info</label>
+          <label><input type="checkbox" value="warn" checked /> Warn</label>
+          <label><input type="checkbox" value="error" checked /> Error</label>
+          <label><input type="checkbox" value="debug" checked /> Debug</label>
+        </div>
+        <ul id="log-list" class="log-list"></ul>
+      </aside>
+    </main>
+    <script src="src/js/logger.js"></script>
+    <script src="src/js/app.js"></script>
+  </body>
+</html>
