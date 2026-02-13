@@ -83,4 +83,4 @@
   }
 
   root.createLogSidebar = createLogSidebar;
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

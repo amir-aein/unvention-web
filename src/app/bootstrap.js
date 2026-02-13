@@ -30,4 +30,4 @@
   loggerService.logEvent("debug", "Layered architecture ready for game integration", {
     source: "system",
   });
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

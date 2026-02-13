@@ -8,4 +8,4 @@
     getEntries: "getEntries() => entry[]",
     subscribe: "subscribe(listener) => unsubscribe",
   };
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

@@ -47,4 +47,4 @@
   }
 
   root.InMemoryLogger = InMemoryLogger;
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

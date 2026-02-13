@@ -11,4 +11,4 @@
   }
 
   root.createContainer = createContainer;
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

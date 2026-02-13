@@ -35,4 +35,4 @@
   }
 
   root.LoggerService = LoggerService;
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);
