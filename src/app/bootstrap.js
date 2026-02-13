@@ -21,6 +21,13 @@
   function renderState() {
     const state = roundEngineService.getState();
     const p1 = (state.players || []).find((player) => player.id === "P1");
+    const rollState = state.rollAndGroup || {};
+    const rollDisplay = Array.isArray(rollState.dice) && rollState.dice.length > 0
+      ? rollState.dice.join(", ")
+      : "-";
+    const groupDisplay = Array.isArray(rollState.groups) && rollState.groups.length > 0
+      ? rollState.groups.map((group) => "[" + group.join(", ") + "]").join(" ")
+      : "-";
 
     document.getElementById("state-day").textContent = state.currentDay;
     document.getElementById("state-turn").textContent = String(state.turnNumber);
@@ -29,6 +36,10 @@
     document.getElementById("state-p1-journals").textContent = String(
       p1 ? p1.completedJournals : 0,
     );
+    document.getElementById("state-last-roll").textContent = rollDisplay;
+    document.getElementById("state-roll-outcome").textContent = rollState.outcomeType || "-";
+    document.getElementById("state-roll-groups").textContent = groupDisplay;
+    document.getElementById("state-seed").textContent = state.rngSeed || "default-seed";
   }
 
   document.getElementById("advance-phase").addEventListener("click", function onAdvancePhase() {
@@ -44,10 +55,19 @@
     renderState();
   });
 
+  document.getElementById("set-seed").addEventListener("click", function onSetSeed() {
+    const seedInput = document.getElementById("seed-input");
+    const seedValue = seedInput.value;
+    roundEngineService.setSeed(seedValue);
+    renderState();
+  });
+
   document.getElementById("reset-game").addEventListener("click", function onResetGame() {
     gameStateService.reset();
     loggerService.replaceEntries([]);
     loggerService.logEvent("warn", "Game reset to default state", { source: "ui" });
+    const seedInput = document.getElementById("seed-input");
+    seedInput.value = "";
     renderState();
   });
 

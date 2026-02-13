@@ -32,6 +32,10 @@ test('GameStateService loads, merges defaults, and persists updates', () => {
   assert.equal(loaded.phase, 'roll_and_group_dice');
   assert.equal(loaded.gameStatus, 'active');
   assert.deepEqual(loaded.players, []);
+  assert.equal(loaded.rngSeed, 'default-seed');
+  assert.equal(Number.isInteger(loaded.rngState), true);
+  assert.deepEqual(loaded.rollAndGroup.dice, []);
+  assert.equal(loaded.rollAndGroup.outcomeType, null);
   assert.equal(loaded.logs.length, 1);
 
   const updated = service.update({ turnNumber: 2 });

@@ -74,6 +74,15 @@ button {
   cursor: pointer;
 }
 
+input[type="text"] {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  min-width: 180px;
+}
+
 button:hover {
   background: #f3f4f6;
 }

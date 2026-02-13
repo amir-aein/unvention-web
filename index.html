@@ -18,11 +18,17 @@
           <div><strong>Phase:</strong> <span id="state-phase">roll_and_group_dice</span></div>
           <div><strong>Status:</strong> <span id="state-status">active</span></div>
           <div><strong>P1 Complete Journals:</strong> <span id="state-p1-journals">0</span></div>
+          <div><strong>Last Roll:</strong> <span id="state-last-roll">-</span></div>
+          <div><strong>Roll Outcome:</strong> <span id="state-roll-outcome">-</span></div>
+          <div><strong>Groups:</strong> <span id="state-roll-groups">-</span></div>
+          <div><strong>RNG Seed:</strong> <span id="state-seed">default-seed</span></div>
         </div>
 
         <div class="demo-actions">
           <button id="advance-phase" type="button">Advance Phase</button>
           <button id="p1-add-journal" type="button">P1 +1 Journal</button>
+          <input id="seed-input" type="text" placeholder="Enter seed" />
+          <button id="set-seed" type="button">Set Seed</button>
         </div>
       </section>
 

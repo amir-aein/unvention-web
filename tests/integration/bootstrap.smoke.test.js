@@ -18,6 +18,8 @@ test('bootstrap wires round controls and reset action', () => {
     phase: '',
     status: '',
     p1: '',
+    seed: '',
+    seedInputValue: '',
   };
 
   globalThis.document = {
@@ -37,6 +39,19 @@ test('bootstrap wires round controls and reset action', () => {
       if (id === 'state-p1-journals') {
         return { set textContent(value) { uiState.p1 = value; } };
       }
+      if (id === 'state-seed') {
+        return { set textContent(value) { uiState.seed = value; } };
+      }
+      if (id === 'seed-input') {
+        return {
+          get value() {
+            return uiState.seedInputValue;
+          },
+          set value(value) {
+            uiState.seedInputValue = value;
+          },
+        };
+      }
       return {
         addEventListener(eventName, callback) {
           listeners[id + ':' + eventName] = callback;
@@ -52,6 +67,15 @@ test('bootstrap wires round controls and reset action', () => {
     phase: 'roll_and_group_dice',
     gameStatus: 'active',
     players: [],
+    rngSeed: 'default-seed',
+    rngState: 3288473048,
+    rollAndGroup: {
+      dice: [],
+      outcomeType: null,
+      groups: [],
+      rolledAtTurn: null,
+      rolledAtDay: null,
+    },
     logs: [],
   };
 
@@ -107,6 +131,14 @@ test('bootstrap wires round controls and reset action', () => {
               context: {},
             });
           },
+          setSeed(seed) {
+            currentState.rngSeed = String(seed || '').trim() || 'default-seed';
+            loggerCalls.push({
+              level: 'info',
+              message: 'RNG seed updated',
+              context: { seed: currentState.rngSeed },
+            });
+          },
         },
       };
     },
@@ -121,14 +153,18 @@ test('bootstrap wires round controls and reset action', () => {
   assert.equal(loggerCalls[0].message, 'Logging system initialized');
   assert.equal(uiState.day, 'Friday');
   assert.equal(uiState.phase, 'roll_and_group_dice');
+  assert.equal(uiState.seed, 'default-seed');
 
   listeners['advance-phase:click']();
   listeners['p1-add-journal:click']();
+  uiState.seedInputValue = 'abc123';
+  listeners['set-seed:click']();
   listeners['reset-game:click']();
 
   const messages = loggerCalls.map((entry) => entry.message);
   assert.ok(messages.includes('Phase advanced'));
   assert.ok(messages.includes('Journal completion updated'));
+  assert.ok(messages.includes('RNG seed updated'));
   assert.ok(messages.includes('Game reset to default state'));
   assert.equal(resetCalled, true);
 

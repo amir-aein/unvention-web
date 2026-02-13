@@ -17,9 +17,10 @@
   };
 
   class RoundEngineService {
-    constructor(gameStateService, loggerService) {
+    constructor(gameStateService, loggerService, diceRoller) {
       this.gameStateService = gameStateService;
       this.loggerService = loggerService;
+      this.diceRoller = typeof diceRoller === "function" ? diceRoller : this.defaultDiceRoller;
     }
 
     getState() {
@@ -28,6 +29,20 @@
 
     getPhases() {
       return [...PHASES];
+    }
+
+    setSeed(seedInput) {
+      const seed = String(seedInput || "").trim() || "default-seed";
+      const hashed = this.hashSeed(seed);
+      const updated = this.gameStateService.update({
+        rngSeed: seed,
+        rngState: hashed,
+      });
+
+      this.loggerService.logEvent("info", "RNG seed updated", {
+        seed,
+      });
+      return updated;
     }
 
     updatePlayerJournalCompletion(playerId, completedJournals) {
@@ -78,6 +93,10 @@
       }
 
       if (phaseIndex < PHASES.length - 1) {
+        if (state.phase === "roll_and_group_dice") {
+          return this.executeRollAndGroup(state);
+        }
+
         const nextPhase = PHASES[phaseIndex + 1];
         const updated = this.gameStateService.update({ phase: nextPhase });
         this.loggerService.logEvent("info", "Phase advanced", {
@@ -90,6 +109,130 @@
       }
 
       return this.completeTurn(state);
+    }
+
+    executeRollAndGroup(stateAtRollPhase) {
+      if (stateAtRollPhase.phase !== "roll_and_group_dice") {
+        this.loggerService.logEvent("warn", "Cannot roll dice outside roll phase", {
+          phase: stateAtRollPhase.phase,
+        });
+        return stateAtRollPhase;
+      }
+
+      const rollResult = this.rollFiveDice(stateAtRollPhase);
+      const dice = rollResult.dice;
+      const analysis = this.analyzeDice(dice);
+      const updated = this.gameStateService.update({
+        phase: "journal",
+        rngState: rollResult.nextRngState,
+        rollAndGroup: {
+          dice: [...dice],
+          outcomeType: analysis.outcomeType,
+          groups: analysis.groups,
+          rolledAtTurn: stateAtRollPhase.turnNumber,
+          rolledAtDay: stateAtRollPhase.currentDay,
+        },
+      });
+
+      this.loggerService.logEvent("info", "Dice rolled and grouped", {
+        day: updated.currentDay,
+        turnNumber: updated.turnNumber,
+        dice,
+        outcomeType: analysis.outcomeType,
+        groups: analysis.groups,
+      });
+
+      return updated;
+    }
+
+    rollFiveDice(state) {
+      if (typeof this.diceRoller === "function" && this.diceRoller !== this.defaultDiceRoller) {
+        const dice = this.diceRoller();
+        return {
+          dice,
+          nextRngState: state.rngState,
+        };
+      }
+
+      let rngState = Number.isInteger(state.rngState) ? state.rngState : this.hashSeed(state.rngSeed);
+      const dice = [];
+      for (let index = 0; index < 5; index += 1) {
+        const next = this.nextRandom(rngState);
+        rngState = next.state;
+        dice.push(Math.floor(next.value * 6) + 1);
+      }
+
+      return {
+        dice,
+        nextRngState: rngState,
+      };
+    }
+
+    analyzeDice(diceInput) {
+      const dice = [...diceInput];
+      const frequency = this.buildFrequency(dice);
+      const uniqueValues = Object.keys(frequency).map((value) => Number(value));
+      const isQuantumLeap = uniqueValues.length === 1;
+      const isEureka = uniqueValues.length === 5;
+
+      if (isQuantumLeap) {
+        return {
+          outcomeType: "quantum_leap",
+          groups: [],
+        };
+      }
+
+      if (isEureka) {
+        return {
+          outcomeType: "eureka",
+          groups: [],
+        };
+      }
+
+      const equalGroups = uniqueValues
+        .filter((value) => frequency[value] > 1)
+        .sort((a, b) => a - b)
+        .map((value) => Array.from({ length: frequency[value] }, () => value));
+
+      const singleValues = uniqueValues.filter((value) => frequency[value] === 1).sort((a, b) => a - b);
+      const groups = singleValues.length > 0 ? [...equalGroups, singleValues] : equalGroups;
+
+      return {
+        outcomeType: groups.length === 3 ? "three_groups" : "two_groups",
+        groups,
+      };
+    }
+
+    buildFrequency(dice) {
+      return dice.reduce((accumulator, value) => {
+        const key = Number(value);
+        accumulator[key] = (accumulator[key] || 0) + 1;
+        return accumulator;
+      }, {});
+    }
+
+    defaultDiceRoller() {
+      return Array.from({ length: 5 }, () => Math.floor(Math.random() * 6) + 1);
+    }
+
+    hashSeed(seed) {
+      let hash = 2166136261;
+      for (let index = 0; index < seed.length; index += 1) {
+        hash ^= seed.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    nextRandom(currentState) {
+      // xorshift32
+      let x = currentState >>> 0;
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      const state = x >>> 0;
+      const value = state / 4294967296;
+      return { state, value };
     }
 
     completeTurn(stateAtEndPhase) {

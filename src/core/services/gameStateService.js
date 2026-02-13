@@ -49,6 +49,15 @@
         phase: "roll_and_group_dice",
         gameStatus: "active",
         players: [],
+        rngSeed: "default-seed",
+        rngState: 3288473048,
+        rollAndGroup: {
+          dice: [],
+          outcomeType: null,
+          groups: [],
+          rolledAtTurn: null,
+          rolledAtDay: null,
+        },
         logs: [],
       };
     }
@@ -62,6 +71,15 @@
       }
       if (!Array.isArray(merged.players)) {
         merged.players = [];
+      }
+      if (typeof merged.rngSeed !== "string" || merged.rngSeed.length === 0) {
+        merged.rngSeed = defaults.rngSeed;
+      }
+      if (!Number.isInteger(merged.rngState)) {
+        merged.rngState = defaults.rngState;
+      }
+      if (!merged.rollAndGroup || typeof merged.rollAndGroup !== "object") {
+        merged.rollAndGroup = defaults.rollAndGroup;
       }
       return merged;
     }
