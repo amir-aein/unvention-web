@@ -10,11 +10,19 @@
     <main class="app">
       <section class="workspace">
         <h1>Unvention</h1>
-        <p>Core systems will be built here. Logging is active for visibility.</p>
+        <p>Round engine sandbox (day, turn, phase progression).</p>
+
+        <div class="game-state-panel">
+          <div><strong>Day:</strong> <span id="state-day">Friday</span></div>
+          <div><strong>Turn:</strong> <span id="state-turn">1</span></div>
+          <div><strong>Phase:</strong> <span id="state-phase">roll_and_group_dice</span></div>
+          <div><strong>Status:</strong> <span id="state-status">active</span></div>
+          <div><strong>P1 Complete Journals:</strong> <span id="state-p1-journals">0</span></div>
+        </div>
+
         <div class="demo-actions">
-          <button id="demo-info" type="button">Log Info Action</button>
-          <button id="demo-warn" type="button">Log Warning Action</button>
-          <button id="demo-error" type="button">Log Error Action</button>
+          <button id="advance-phase" type="button">Advance Phase</button>
+          <button id="p1-add-journal" type="button">P1 +1 Journal</button>
         </div>
       </section>
 
@@ -42,6 +50,7 @@
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
+    <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js"></script>
     <script src="src/app/container.js"></script>
     <script src="src/app/bootstrap.js"></script>

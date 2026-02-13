@@ -3,6 +3,7 @@
   const container = root.createContainer();
   const loggerService = container.loggerService;
   const gameStateService = container.gameStateService;
+  const roundEngineService = container.roundEngineService;
   const loadedState = gameStateService.load();
 
   if (loadedState.logs.length > 0) {
@@ -17,31 +18,37 @@
 
   root.createLogSidebar(loggerService);
 
-  document.getElementById("demo-info").addEventListener("click", function onInfo() {
-    loggerService.logEvent("info", "Player explored a safe action", {
-      playerId: "P1",
-      phase: "setup",
-    });
+  function renderState() {
+    const state = roundEngineService.getState();
+    const p1 = (state.players || []).find((player) => player.id === "P1");
+
+    document.getElementById("state-day").textContent = state.currentDay;
+    document.getElementById("state-turn").textContent = String(state.turnNumber);
+    document.getElementById("state-phase").textContent = state.phase;
+    document.getElementById("state-status").textContent = state.gameStatus;
+    document.getElementById("state-p1-journals").textContent = String(
+      p1 ? p1.completedJournals : 0,
+    );
+  }
+
+  document.getElementById("advance-phase").addEventListener("click", function onAdvancePhase() {
+    roundEngineService.advancePhase();
+    renderState();
   });
 
-  document.getElementById("demo-warn").addEventListener("click", function onWarn() {
-    loggerService.logEvent("warn", "Player tried an out-of-order action", {
-      playerId: "P1",
-      phase: "turn",
-    });
-  });
-
-  document.getElementById("demo-error").addEventListener("click", function onError() {
-    loggerService.logEvent("error", "Action failed validation", {
-      playerId: "P1",
-      phase: "resolution",
-    });
+  document.getElementById("p1-add-journal").addEventListener("click", function onAddJournal() {
+    const state = roundEngineService.getState();
+    const p1 = (state.players || []).find((player) => player.id === "P1");
+    const nextCount = Math.min(3, (p1 ? p1.completedJournals : 0) + 1);
+    roundEngineService.updatePlayerJournalCompletion("P1", nextCount);
+    renderState();
   });
 
   document.getElementById("reset-game").addEventListener("click", function onResetGame() {
     gameStateService.reset();
     loggerService.replaceEntries([]);
     loggerService.logEvent("warn", "Game reset to default state", { source: "ui" });
+    renderState();
   });
 
   if (loadedState.logs.length === 0) {
@@ -54,4 +61,6 @@
       source: "system",
     });
   }
+
+  renderState();
 })(typeof window !== "undefined" ? window : globalThis);

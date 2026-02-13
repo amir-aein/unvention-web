@@ -30,6 +30,8 @@ test('GameStateService loads, merges defaults, and persists updates', () => {
   assert.equal(loaded.currentDay, 'Saturday');
   assert.equal(loaded.turnNumber, 1);
   assert.equal(loaded.phase, 'roll_and_group_dice');
+  assert.equal(loaded.gameStatus, 'active');
+  assert.deepEqual(loaded.players, []);
   assert.equal(loaded.logs.length, 1);
 
   const updated = service.update({ turnNumber: 2 });

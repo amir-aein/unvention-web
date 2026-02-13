@@ -47,6 +47,8 @@
         currentDay: "Friday",
         turnNumber: 1,
         phase: "roll_and_group_dice",
+        gameStatus: "active",
+        players: [],
         logs: [],
       };
     }
@@ -57,6 +59,9 @@
       const merged = { ...defaults, ...candidate };
       if (!Array.isArray(merged.logs)) {
         merged.logs = [];
+      }
+      if (!Array.isArray(merged.players)) {
+        merged.players = [];
       }
       return merged;
     }

@@ -7,10 +7,12 @@
     const storage = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
     const stateStore = new root.LocalStorageStateStore(storage, "unvention.appState.v1");
     const gameStateService = new root.GameStateService(stateStore);
+    const roundEngineService = new root.RoundEngineService(gameStateService, loggerService);
 
     return {
       gameStateService,
       loggerService,
+      roundEngineService,
     };
   }
 
