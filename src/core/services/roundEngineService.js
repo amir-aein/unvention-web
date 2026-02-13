@@ -18,6 +18,7 @@
   const JOURNAL_SIZE = 4;
   const WORKSHOP_COUNT = 4;
   const WORKSHOP_SIZE = 5;
+  const BUILD_WRENCH_COST = 2;
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],
@@ -131,6 +132,29 @@
           values: [...groupValues],
         }))
         .filter((option) => option.key !== context.excludedGroupKey);
+    }
+
+    getAvailableWrenches(playerId) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return 0;
+      }
+      const earned = (player.journals || []).reduce((count, journal) => {
+        const row = Array.isArray(journal.rowWrenches) ? journal.rowWrenches : [];
+        const col = Array.isArray(journal.columnWrenches) ? journal.columnWrenches : [];
+        return (
+          count +
+          row.filter((value) => value === "earned").length +
+          col.filter((value) => value === "earned").length
+        );
+      }, 0);
+      const spent = Number(player.spentWrenches || 0);
+      return Math.max(0, earned - spent);
+    }
+
+    getBuildCost(_playerId) {
+      return BUILD_WRENCH_COST;
     }
 
     selectJournalingGroup(playerId, selectionKey) {
@@ -352,6 +376,143 @@
       return { ok: true, reason: null, state: updated };
     }
 
+    updateMechanismDraft(playerId, workshopId, rowIndex, columnIndex) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "build") {
+        return { ok: false, reason: "invalid_phase", state };
+      }
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      const workshop = player.workshops.find((item) => item.id === workshopId);
+      if (!workshop) {
+        return { ok: false, reason: "invalid_workshop", state };
+      }
+      const cell = workshop.cells?.[rowIndex]?.[columnIndex];
+      if (!cell || cell.kind === "empty") {
+        return { ok: false, reason: "out_of_bounds", state };
+      }
+      if (!cell.circled) {
+        return { ok: false, reason: "uncircled_part", state };
+      }
+
+      const drafts = { ...(state.buildDrafts || {}) };
+      const currentDraft = drafts[playerId] || null;
+      const committedCellKeys = new Set(
+        (Array.isArray(player.mechanisms) ? player.mechanisms : [])
+          .filter((item) => item.workshopId === workshopId)
+          .flatMap((item) => (Array.isArray(item.path) ? item.path : []))
+          .map((item) => this.pointKey(item)),
+      );
+      const point = { row: Number(rowIndex), col: Number(columnIndex) };
+      const pointKey = this.pointKey(point);
+      if (committedCellKeys.has(pointKey)) {
+        return { ok: false, reason: "already_in_mechanism", state };
+      }
+      if (!currentDraft) {
+        drafts[playerId] = {
+          workshopId,
+          path: [point],
+        };
+        const updated = this.gameStateService.update({ buildDrafts: drafts });
+        return { ok: true, reason: null, state: updated };
+      }
+
+      if (currentDraft.workshopId !== workshopId) {
+        return { ok: false, reason: "workshop_mismatch", state };
+      }
+
+      const path = Array.isArray(currentDraft.path) ? [...currentDraft.path] : [];
+      if (path.length === 0) {
+        drafts[playerId] = { workshopId, path: [point] };
+        const updated = this.gameStateService.update({ buildDrafts: drafts });
+        return { ok: true, reason: null, state: updated };
+      }
+      const existingIndex = path.findIndex((item) => item.row === point.row && item.col === point.col);
+      if (existingIndex >= 0) {
+        const nextPath = [...path.slice(0, existingIndex), ...path.slice(existingIndex + 1)];
+        if (nextPath.length > 1 && !this.isConnectedSelection(nextPath)) {
+          return { ok: false, reason: "disconnect_not_allowed", state };
+        }
+        drafts[playerId] = { workshopId, path: nextPath };
+        const updated = this.gameStateService.update({ buildDrafts: drafts });
+        return { ok: true, reason: "removed", state: updated };
+      }
+
+      const hasAdjacent = path.some((item) => this.areOrthogonallyAdjacent(item, point));
+      if (!hasAdjacent) {
+        return { ok: false, reason: "not_adjacent", state };
+      }
+
+      const nextPath = [...path, point];
+      drafts[playerId] = { workshopId, path: nextPath };
+      const updated = this.gameStateService.update({ buildDrafts: drafts });
+      return { ok: true, reason: null, state: updated };
+    }
+
+    clearMechanismDraft(playerId) {
+      const state = this.gameStateService.getState();
+      const drafts = { ...(state.buildDrafts || {}) };
+      delete drafts[playerId];
+      return this.gameStateService.update({ buildDrafts: drafts });
+    }
+
+    finishBuildingMechanism(playerId) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "build") {
+        return { ok: false, reason: "invalid_phase", state };
+      }
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      if (
+        player.lastBuildAtTurn === state.turnNumber &&
+        player.lastBuildAtDay === state.currentDay
+      ) {
+        return { ok: false, reason: "already_built_this_turn", state };
+      }
+      const draft = state.buildDrafts?.[playerId];
+      if (!draft || !Array.isArray(draft.path) || draft.path.length < 2) {
+        return { ok: false, reason: "invalid_path", state };
+      }
+      const available = this.getAvailableWrenches(playerId);
+      const cost = this.getBuildCost(playerId);
+      if (available < cost) {
+        return { ok: false, reason: "insufficient_wrenches", state };
+      }
+
+      const mechanisms = Array.isArray(player.mechanisms) ? [...player.mechanisms] : [];
+      mechanisms.push({
+        id: "M" + String(mechanisms.length + 1),
+        workshopId: draft.workshopId,
+        path: draft.path.map((item) => ({ row: item.row, col: item.col })),
+        edges: this.selectionToEdgeIds(draft.path),
+        builtAtTurn: state.turnNumber,
+        builtAtDay: state.currentDay,
+      });
+      player.mechanisms = mechanisms;
+      player.spentWrenches = Number(player.spentWrenches || 0) + cost;
+      player.lastBuildAtTurn = state.turnNumber;
+      player.lastBuildAtDay = state.currentDay;
+
+      const players = state.players.map((item) => (item.id === player.id ? player : item));
+      const drafts = { ...(state.buildDrafts || {}) };
+      delete drafts[playerId];
+      const updated = this.gameStateService.update({
+        players,
+        buildDrafts: drafts,
+      });
+      this.loggerService.logEvent("info", "Mechanism built", {
+        playerId,
+        workshopId: draft.workshopId,
+        size: draft.path.length,
+        wrenchCost: cost,
+      });
+      return { ok: true, reason: null, state: updated };
+    }
+
     placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
       const state = this.gameStateService.getState();
       const player = this.findPlayer(state, playerId);
@@ -517,6 +678,10 @@
       return {
         id: playerId,
         completedJournals: 0,
+        spentWrenches: 0,
+        mechanisms: [],
+        lastBuildAtTurn: null,
+        lastBuildAtDay: null,
         journals: Array.from({ length: JOURNAL_COUNT }, (_item, index) =>
           this.createDefaultJournal(index + 1),
         ),
@@ -864,6 +1029,7 @@
           journalSelections: {},
           workshopSelections: {},
           workshopPhaseContext: {},
+          buildDrafts: {},
         });
         const prepared = this.ensureJournalRoll(progressed);
 
@@ -892,6 +1058,7 @@
         journalSelections: {},
         workshopSelections: {},
         workshopPhaseContext: {},
+        buildDrafts: {},
       });
       const prepared = this.ensureJournalRoll(nextTurn);
 
@@ -1012,6 +1179,65 @@
         return [...values];
       }
       return [...values.slice(0, index), ...values.slice(index + 1)];
+    }
+
+    areOrthogonallyAdjacent(a, b) {
+      const delta = Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
+      return delta === 1;
+    }
+
+    pathToEdgeIds(path) {
+      const safePath = Array.isArray(path) ? path : [];
+      const edges = [];
+      for (let index = 1; index < safePath.length; index += 1) {
+        const a = safePath[index - 1];
+        const b = safePath[index];
+        const left = "r" + String(a.row) + "c" + String(a.col);
+        const right = "r" + String(b.row) + "c" + String(b.col);
+        edges.push(left < right ? left + "-" + right : right + "-" + left);
+      }
+      return edges;
+    }
+
+    pointKey(point) {
+      return String(point.row) + ":" + String(point.col);
+    }
+
+    isConnectedSelection(points) {
+      const queue = [points[0]];
+      const visited = new Set([this.pointKey(points[0])]);
+      while (queue.length > 0) {
+        const current = queue.shift();
+        points.forEach((point) => {
+          const key = this.pointKey(point);
+          if (visited.has(key)) {
+            return;
+          }
+          if (this.areOrthogonallyAdjacent(current, point)) {
+            visited.add(key);
+            queue.push(point);
+          }
+        });
+      }
+      return visited.size === points.length;
+    }
+
+    selectionToEdgeIds(points) {
+      const safe = Array.isArray(points) ? points : [];
+      const edges = [];
+      for (let i = 0; i < safe.length; i += 1) {
+        for (let j = i + 1; j < safe.length; j += 1) {
+          const a = safe[i];
+          const b = safe[j];
+          if (!this.areOrthogonallyAdjacent(a, b)) {
+            continue;
+          }
+          const left = "r" + String(a.row) + "c" + String(a.col);
+          const right = "r" + String(b.row) + "c" + String(b.col);
+          edges.push(left < right ? left + "-" + right : right + "-" + left);
+        }
+      }
+      return edges;
     }
 
     updateWrenchesForJournal(journal) {

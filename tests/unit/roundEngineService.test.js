@@ -370,3 +370,70 @@ test('RoundEngineService applies workshop selection per clicked part and locks w
   assert.equal(selection.workshopLocked, true);
   assert.equal(workshop.partsByNumber['5'].circled, 0);
 });
+
+test('RoundEngineService drafts build path with order-independent adjacency', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const workshop = state.players.find((player) => player.id === 'P1').workshops.find((w) => w.id === 'W1');
+  workshop.cells[1][0].circled = true;
+  workshop.cells[0][0].circled = true;
+  workshop.cells[0][1].circled = true;
+  workshop.cells[1][1].circled = true;
+  harness.engine.gameStateService.update({ players: state.players });
+
+  const start = harness.engine.updateMechanismDraft('P1', 'W1', 1, 0);
+  assert.equal(start.ok, true);
+  const adjacent = harness.engine.updateMechanismDraft('P1', 'W1', 0, 0);
+  assert.equal(adjacent.ok, true);
+  const nonAdjacentBlocked = harness.engine.updateMechanismDraft('P1', 'W1', 1, 3);
+  assert.equal(nonAdjacentBlocked.ok, false);
+  assert.equal(nonAdjacentBlocked.reason, 'uncircled_part');
+  const addedFromAnySelected = harness.engine.updateMechanismDraft('P1', 'W1', 0, 1);
+  assert.equal(addedFromAnySelected.ok, true);
+  const diagonalBlocked = harness.engine.updateMechanismDraft('P1', 'W1', 1, 2);
+  assert.equal(diagonalBlocked.ok, false);
+  assert.equal(diagonalBlocked.reason, 'uncircled_part');
+  const third = harness.engine.updateMechanismDraft('P1', 'W1', 1, 1);
+  assert.equal(third.ok, true);
+  const remove = harness.engine.updateMechanismDraft('P1', 'W1', 1, 1);
+  assert.equal(remove.ok, true);
+  assert.equal(remove.reason, 'removed');
+
+  const draft = harness.getState().buildDrafts.P1;
+  assert.equal(draft.path.length, 3);
+  assert.equal(draft.path.some((p) => p.row === 1 && p.col === 0), true);
+  assert.equal(draft.path.some((p) => p.row === 0 && p.col === 0), true);
+  assert.equal(draft.path.some((p) => p.row === 0 && p.col === 1), true);
+});
+
+test('RoundEngineService finish building spends wrenches and enforces once per turn', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  // Give two earned wrenches and enough circled workshop parts.
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  p1.workshops[0].cells[0][0].circled = true;
+  p1.workshops[0].cells[0][1].circled = true;
+  harness.engine.gameStateService.update({ players: state.players });
+
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 0);
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 1);
+  const built = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(built.ok, true);
+
+  const after = harness.getState();
+  const player = after.players.find((item) => item.id === 'P1');
+  assert.equal(player.mechanisms.length, 1);
+  assert.equal(player.spentWrenches, 2);
+  assert.equal(player.mechanisms[0].edges.length, 1);
+  assert.equal(after.buildDrafts.P1, undefined);
+
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 0);
+  harness.engine.updateMechanismDraft('P1', 'W1', 0, 1);
+  const second = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'already_built_this_turn');
+});

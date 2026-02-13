@@ -62,6 +62,9 @@
     if (state.gameStatus === "completed") {
       return false;
     }
+    if (state.phase === "build") {
+      return true;
+    }
     if (state.phase !== "journal") {
       return true;
     }
@@ -89,7 +92,7 @@
     }
 
     if (state.phase === "build") {
-      return "Build phase.";
+      return "";
     }
 
     return "Invent phase.";
@@ -217,10 +220,57 @@
       return;
     }
 
-    if (state.phase !== "journal" && state.phase !== "workshop") {
+    if (state.phase !== "journal" && state.phase !== "workshop" && state.phase !== "build") {
       controls.innerHTML = "";
       if (controls.style) {
         controls.style.display = "none";
+      }
+      return;
+    }
+
+    if (state.phase === "build") {
+      const player = (state.players || []).find((item) => item.id === activePlayerId);
+      const availableWrenches =
+        typeof roundEngineService.getAvailableWrenches === "function"
+          ? roundEngineService.getAvailableWrenches(activePlayerId)
+          : 0;
+      const buildCost =
+        typeof roundEngineService.getBuildCost === "function"
+          ? roundEngineService.getBuildCost(activePlayerId)
+          : 2;
+      const draft = state.buildDrafts?.[activePlayerId];
+      const builtThisTurn =
+        Boolean(player) &&
+        player.lastBuildAtTurn === state.turnNumber &&
+        player.lastBuildAtDay === state.currentDay;
+      const canFinish =
+        !builtThisTurn &&
+        availableWrenches >= buildCost &&
+        Array.isArray(draft?.path) &&
+        draft.path.length >= 2;
+      controls.innerHTML =
+        '<div class="journal-control-row">' +
+        '<span class="journal-chip journal-chip--active">Wrenches ' +
+        String(availableWrenches) +
+        "</span>" +
+        '<span class="journal-chip">Cost ' +
+        String(buildCost) +
+        "</span>" +
+        (Array.isArray(draft?.path)
+          ? '<span class="journal-chip">Draft ' + String(draft.path.length) + " parts</span>"
+          : "") +
+        "</div>" +
+        '<div class="journal-control-row">' +
+        '<button type="button" class="journal-chip journal-chip--group" data-action="finish-building" ' +
+        (canFinish ? "" : "disabled") +
+        ">Finish Building</button>" +
+        '<button type="button" class="journal-chip" data-action="clear-build-draft" ' +
+        (Array.isArray(draft?.path) && draft.path.length > 0 ? "" : "disabled") +
+        ">Clear Draft</button>" +
+        "</div>" +
+        "<div class='journal-control-row'><span class='journal-muted'>Click circled parts to draw an orthogonal mechanism path.</span></div>";
+      if (controls.style) {
+        controls.style.display = "grid";
       }
       return;
     }
@@ -396,6 +446,21 @@
         const selectedWorkshopId = selection?.selectedWorkshopId || "";
         const workshopLockedOut = Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
         const activeNumber = Number(selection?.activeNumber);
+        const buildDraft = state.buildDrafts?.[activePlayerId];
+        const isBuildPhase = state.phase === "build";
+        const draftWorkshopId = buildDraft?.workshopId || "";
+        const buildLockedOut = Boolean(draftWorkshopId) && draftWorkshopId !== workshop.id;
+        const draftPath = Array.isArray(buildDraft?.path) ? buildDraft.path : [];
+        const builtThisTurn =
+          Boolean(player) &&
+          player.lastBuildAtTurn === state.turnNumber &&
+          player.lastBuildAtDay === state.currentDay;
+        const committedCells = new Set(
+          (Array.isArray(player.mechanisms) ? player.mechanisms : [])
+            .filter((item) => item.workshopId === workshop.id)
+            .flatMap((item) => (Array.isArray(item.path) ? item.path : []))
+            .map((item) => String(item.row) + ":" + String(item.col)),
+        );
         const grid = cells
           .map((value, rowIndex) => {
             return value
@@ -404,16 +469,42 @@
                   return '<span class="workshop-cell workshop-cell--empty"></span>';
                 }
                 const label = cell.kind === "wild" ? "?" : String(cell.value || "");
+                const valueClass =
+                  cell.kind === "number" && Number.isInteger(cell.value)
+                    ? " workshop-cell--v" + String(cell.value)
+                    : "";
                 const canMatchActive =
                   selection?.selectedGroupKey &&
                   Number.isInteger(activeNumber) &&
                   !workshopLockedOut &&
                   !cell.circled &&
                   (cell.kind === "wild" || (cell.kind === "number" && cell.value === activeNumber));
-                const isDisabled = !canMatchActive;
+                const onDraftPath = Array.isArray(buildDraft?.path)
+                  ? buildDraft.path.some((item) => item.row === rowIndex && item.col === columnIndex)
+                  : false;
+                const cellKey = String(rowIndex) + ":" + String(columnIndex);
+                const inCommittedMechanism = committedCells.has(cellKey);
+                const adjacentToDraft = draftPath.some(
+                  (item) => Math.abs(item.row - rowIndex) + Math.abs(item.col - columnIndex) === 1,
+                );
+                const canBuildSelect =
+                  isBuildPhase &&
+                  !builtThisTurn &&
+                  cell.circled &&
+                  !buildLockedOut &&
+                  !inCommittedMechanism &&
+                  (
+                    (draftWorkshopId === "" && draftPath.length === 0) ||
+                    (draftWorkshopId === workshop.id && (onDraftPath || adjacentToDraft))
+                  );
+                const isDisabled = isBuildPhase ? !canBuildSelect : (!cell.circled && !canMatchActive);
                 return (
                   '<button type="button" class="workshop-cell' +
+                  valueClass +
+                  (onDraftPath ? " workshop-cell--path" : "") +
+                  (inCommittedMechanism ? " workshop-cell--mechanism" : "") +
                   (canMatchActive ? " workshop-cell--clickable" : "") +
+                  (canBuildSelect ? " workshop-cell--build-clickable" : "") +
                   (isDisabled ? " workshop-cell--disabled" : "") +
                   (cell.circled ? " workshop-cell--circled" : "") +
                   (cell.kind === "wild" ? " workshop-cell--wild" : "") +
@@ -433,6 +524,7 @@
               .join("");
           })
           .join("");
+        const mechanismLines = renderWorkshopMechanismLines(state, player, workshop.id);
         return (
           '<article class="workshop-card">' +
           "<h3>" +
@@ -441,14 +533,87 @@
           workshop.id +
           ")</span>" +
           "</h3>" +
+          '<div class="workshop-grid-wrapper">' +
+          '<div class="workshop-grid-lines">' +
+          mechanismLines +
+          "</div>" +
           '<div class="workshop-grid">' +
           grid +
+          "</div>" +
           "</div>" +
           "</article>"
         );
       })
       .join("");
     container.innerHTML = cardsHtml;
+  }
+
+  function renderWorkshopMechanismLines(state, player, workshopId) {
+    const workshop = player.workshops.find((item) => item.id === workshopId);
+    if (!workshop) {
+      return "";
+    }
+    const lines = [];
+    const committed = Array.isArray(player.mechanisms)
+      ? player.mechanisms.filter((item) => item.workshopId === workshopId)
+      : [];
+    committed.forEach((mechanism) => {
+      const edges = Array.isArray(mechanism.edges) ? mechanism.edges : [];
+      edges.forEach((edgeId) => {
+        const parsed = parseEdgeId(edgeId);
+        if (parsed) {
+          lines.push({ a: parsed.a, b: parsed.b, className: "workshop-line workshop-line--committed" });
+        }
+      });
+    });
+    const draft = state.buildDrafts?.[activePlayerId];
+    if (draft?.workshopId === workshopId && Array.isArray(draft.path)) {
+      const edgeIds = typeof roundEngineService.selectionToEdgeIds === "function"
+        ? roundEngineService.selectionToEdgeIds(draft.path)
+        : [];
+      edgeIds.forEach((edgeId) => {
+        const parsed = parseEdgeId(edgeId);
+        if (parsed) {
+          lines.push({ a: parsed.a, b: parsed.b, className: "workshop-line workshop-line--draft" });
+        }
+      });
+    }
+    if (lines.length === 0) {
+      return "";
+    }
+    const lineHtml = lines
+      .map(({ a, b, className }) => {
+        const x1 = a.col * 100 + 50;
+        const y1 = a.row * 100 + 50;
+        const x2 = b.col * 100 + 50;
+        const y2 = b.row * 100 + 50;
+        return (
+          '<line class="' +
+          className +
+          '" x1="' +
+          String(x1) +
+          '" y1="' +
+          String(y1) +
+          '" x2="' +
+          String(x2) +
+          '" y2="' +
+          String(y2) +
+          '"></line>'
+        );
+      })
+      .join("");
+    return '<svg viewBox="0 0 500 500" preserveAspectRatio="none">' + lineHtml + "</svg>";
+  }
+
+  function parseEdgeId(edgeId) {
+    const match = /^r(\d+)c(\d+)-r(\d+)c(\d+)$/.exec(String(edgeId || ""));
+    if (!match) {
+      return null;
+    }
+    return {
+      a: { row: Number(match[1]), col: Number(match[2]) },
+      b: { row: Number(match[3]), col: Number(match[4]) },
+    };
   }
 
   function renderJournals(state, player) {
@@ -678,6 +843,22 @@
       return;
     }
 
+    if (action === "finish-building") {
+      runWithUndo(() => {
+        roundEngineService.finishBuildingMechanism(activePlayerId);
+      });
+      renderState();
+      return;
+    }
+
+    if (action === "clear-build-draft") {
+      runWithUndo(() => {
+        roundEngineService.clearMechanismDraft(activePlayerId);
+      });
+      renderState();
+      return;
+    }
+
     if (action === "select-number") {
       runWithUndo(() => {
         roundEngineService.selectActiveJournalNumber(
@@ -733,9 +914,16 @@
     const workshopId = button.getAttribute("data-workshop-id");
     const rowIndex = Number(button.getAttribute("data-row-index"));
     const columnIndex = Number(button.getAttribute("data-column-index"));
+    const state = roundEngineService.getState();
     runWithUndo(() => {
-      roundEngineService.placeWorkshopPart(activePlayerId, workshopId, rowIndex, columnIndex);
-      maybeAutoAdvanceAfterWorkshopProgress();
+      if (state.phase === "workshop") {
+        roundEngineService.placeWorkshopPart(activePlayerId, workshopId, rowIndex, columnIndex);
+        maybeAutoAdvanceAfterWorkshopProgress();
+        return;
+      }
+      if (state.phase === "build") {
+        roundEngineService.updateMechanismDraft(activePlayerId, workshopId, rowIndex, columnIndex);
+      }
     });
     renderState();
   });

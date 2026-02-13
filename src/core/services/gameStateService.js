@@ -61,6 +61,7 @@
         journalSelections: {},
         workshopSelections: {},
         workshopPhaseContext: {},
+        buildDrafts: {},
         rollAndGroup: {
           dice: [],
           outcomeType: null,
@@ -99,6 +100,9 @@
       }
       if (!merged.workshopPhaseContext || typeof merged.workshopPhaseContext !== "object") {
         merged.workshopPhaseContext = {};
+      }
+      if (!merged.buildDrafts || typeof merged.buildDrafts !== "object") {
+        merged.buildDrafts = {};
       }
       if (!merged.rollAndGroup || typeof merged.rollAndGroup !== "object") {
         merged.rollAndGroup = defaults.rollAndGroup;
