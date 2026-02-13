@@ -71,16 +71,42 @@ test('RoundEngineService advances through standard phase order', () => {
   assert.equal(harness.getState().phase, 'workshop');
 
   harness.engine.advancePhase();
-  assert.equal(harness.getState().phase, 'build');
-
-  harness.engine.advancePhase();
-  assert.equal(harness.getState().phase, 'invent');
-
-  harness.engine.advancePhase();
   const afterTurn = harness.getState();
   assert.equal(afterTurn.phase, 'journal');
   assert.equal(afterTurn.turnNumber, 2);
   assert.equal(afterTurn.currentDay, 'Friday');
+});
+
+test('RoundEngineService skips build when player has fewer than two wrenches', () => {
+  const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
+  harness.engine.initializePlayers(['P1']);
+  harness.engine.ensureJournalRoll();
+  harness.engine.selectJournalingGroup('P1', 'group-0');
+  harness.engine.selectJournal('P1', 'J1');
+  harness.engine.selectActiveJournalNumber('P1', 5);
+  harness.engine.placeJournalNumber('P1', 0, 0);
+  harness.engine.advancePhase();
+  assert.equal(harness.getState().phase, 'workshop');
+
+  harness.engine.advancePhase();
+  const state = harness.getState();
+  assert.equal(state.phase, 'journal');
+  assert.equal(state.turnNumber, 2);
+});
+
+test('RoundEngineService skips invent when no mechanism built this turn', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  harness.engine.gameStateService.update({ players: state.players });
+
+  harness.engine.advancePhase();
+  const after = harness.getState();
+  assert.equal(after.phase, 'journal');
+  assert.equal(after.turnNumber, 2);
 });
 
 test('RoundEngineService ends Friday and starts Saturday when threshold reached', () => {

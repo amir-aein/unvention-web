@@ -5,7 +5,12 @@
   const gameStateService = container.gameStateService;
   const roundEngineService = container.roundEngineService;
   const loadedState = gameStateService.load();
-  const undoStack = [];
+  const undoStack = Array.isArray(loadedState.undoHistory)
+    ? loadedState.undoHistory.map((snapshot) => ({
+        state: snapshot?.state || {},
+        logs: Array.isArray(snapshot?.logs) ? snapshot.logs : [],
+      }))
+    : [];
 
   if (loadedState.logs.length > 0) {
     loggerService.replaceEntries(loadedState.logs);
@@ -40,10 +45,21 @@
   }
 
   function createSnapshot() {
+    const snapshotState = gameStateService.getState();
+    delete snapshotState.undoHistory;
     return {
-      state: gameStateService.getState(),
+      state: snapshotState,
       logs: loggerService.toSerializableEntries(),
     };
+  }
+
+  function persistUndoHistory() {
+    gameStateService.update({
+      undoHistory: undoStack.map((snapshot) => ({
+        state: snapshot.state,
+        logs: snapshot.logs,
+      })),
+    });
   }
 
   function pushUndoSnapshot() {
@@ -51,6 +67,7 @@
     if (undoStack.length > 100) {
       undoStack.shift();
     }
+    persistUndoHistory();
   }
 
   function runWithUndo(action) {
@@ -473,20 +490,29 @@
                   cell.kind === "number" && Number.isInteger(cell.value)
                     ? " workshop-cell--v" + String(cell.value)
                     : "";
+                const allowedWorkshopValues = Array.isArray(selection?.remainingNumbers)
+                  ? selection.remainingNumbers.map((item) => Number(item))
+                  : [];
                 const canMatchActive =
+                  state.phase === "workshop" &&
                   selection?.selectedGroupKey &&
-                  Number.isInteger(activeNumber) &&
                   !workshopLockedOut &&
                   !cell.circled &&
-                  (cell.kind === "wild" || (cell.kind === "number" && cell.value === activeNumber));
-                const onDraftPath = Array.isArray(buildDraft?.path)
+                  (
+                    cell.kind === "wild" ||
+                    (cell.kind === "number" && allowedWorkshopValues.includes(Number(cell.value)))
+                  );
+                const isDraftWorkshop = isBuildPhase && draftWorkshopId === workshop.id;
+                const onDraftPath = isDraftWorkshop && Array.isArray(buildDraft?.path)
                   ? buildDraft.path.some((item) => item.row === rowIndex && item.col === columnIndex)
                   : false;
                 const cellKey = String(rowIndex) + ":" + String(columnIndex);
                 const inCommittedMechanism = committedCells.has(cellKey);
-                const adjacentToDraft = draftPath.some(
-                  (item) => Math.abs(item.row - rowIndex) + Math.abs(item.col - columnIndex) === 1,
-                );
+                const adjacentToDraft = isDraftWorkshop
+                  ? draftPath.some(
+                      (item) => Math.abs(item.row - rowIndex) + Math.abs(item.col - columnIndex) === 1,
+                    )
+                  : false;
                 const canBuildSelect =
                   isBuildPhase &&
                   !builtThisTurn &&
@@ -495,17 +521,20 @@
                   !inCommittedMechanism &&
                   (
                     (draftWorkshopId === "" && draftPath.length === 0) ||
-                    (draftWorkshopId === workshop.id && (onDraftPath || adjacentToDraft))
+                    (isDraftWorkshop && (onDraftPath || adjacentToDraft))
                   );
                 const isDisabled = isBuildPhase ? !canBuildSelect : (!cell.circled && !canMatchActive);
+                const shouldVisuallyDim = isBuildPhase
+                  ? (!canBuildSelect && !cell.circled && !onDraftPath && !inCommittedMechanism)
+                  : (!cell.circled && !canMatchActive);
                 return (
                   '<button type="button" class="workshop-cell' +
                   valueClass +
                   (onDraftPath ? " workshop-cell--path" : "") +
                   (inCommittedMechanism ? " workshop-cell--mechanism" : "") +
-                  (canMatchActive ? " workshop-cell--clickable" : "") +
+                  (state.phase === "workshop" && canMatchActive ? " workshop-cell--clickable" : "") +
                   (canBuildSelect ? " workshop-cell--build-clickable" : "") +
-                  (isDisabled ? " workshop-cell--disabled" : "") +
+                  (shouldVisuallyDim ? " workshop-cell--disabled" : "") +
                   (cell.circled ? " workshop-cell--circled" : "") +
                   (cell.kind === "wild" ? " workshop-cell--wild" : "") +
                   '" data-workshop-id="' +
@@ -737,17 +766,14 @@
         '">' +
         "<h3>" +
         journal.id +
-        "</h3>" +
-        '<div class="journal-meta">Idea: ' +
+        " (💡 Idea: " +
         journal.ideaStatus +
-        " | Completion: " +
-        journal.completionStatus +
-        "</div>" +
+        ")" +
+        "</h3>" +
         '<div class="journal-layout">' +
         '<div class="journal-column-wrenches">' +
         columnWrenchesHtml +
         "</div>" +
-        '<div class="journal-grid-row">' +
         '<div class="journal-grid" data-journal-id="' +
         journal.id +
         '">' +
@@ -755,7 +781,6 @@
         "</div>" +
         '<div class="journal-row-wrenches">' +
         rowWrenchesHtml +
-        "</div>" +
         "</div>" +
         "</div>" +
         "</article>"
@@ -777,6 +802,7 @@
     const desiredSeed = String(input?.value || "").trim() || generateRandomSeed();
     undoStack.length = 0;
     gameStateService.reset();
+    persistUndoHistory();
     loggerService.replaceEntries([]);
     roundEngineService.initializePlayers(["P1"]);
     roundEngineService.setSeed(desiredSeed);
@@ -797,6 +823,7 @@
     }
     undoStack.length = 0;
     gameStateService.reset();
+    persistUndoHistory();
     loggerService.replaceEntries([]);
     loggerService.logEvent("warn", "Game reset; returned to New Game screen", { source: "ui" });
     renderState();
@@ -808,6 +835,7 @@
     }
     const snapshot = undoStack.pop();
     gameStateService.setState(snapshot.state);
+    persistUndoHistory();
     loggerService.replaceEntries(snapshot.logs);
     renderState();
   });

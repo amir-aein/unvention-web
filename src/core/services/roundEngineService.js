@@ -200,7 +200,7 @@
       const updated = this.gameStateService.update({
         journalSelections: selections,
       });
-      this.loggerService.logEvent("info", "Journaling group selected", {
+      this.loggerService.logEvent("info", "Player X selected journaling group " + selected.values.join(", "), {
         playerId,
         values: selected.values,
       });
@@ -279,7 +279,7 @@
         placementsThisTurn: existing.placementsThisTurn || 0,
       };
       const updated = this.gameStateService.update({ workshopSelections: selections });
-      this.loggerService.logEvent("info", "Workshop group selected", {
+      this.loggerService.logEvent("info", "Player X selected workshopping group " + selected.values.join(", "), {
         playerId,
         values: selected.values,
       });
@@ -328,10 +328,8 @@
       }
 
       const activeNumber = Number(selection.activeNumber);
-      if (!Number.isInteger(activeNumber)) {
-        return { ok: false, reason: "missing_number", state };
-      }
-      if (!Array.isArray(selection.remainingNumbers) || !selection.remainingNumbers.includes(activeNumber)) {
+      const remainingNumbers = Array.isArray(selection.remainingNumbers) ? selection.remainingNumbers : [];
+      if (remainingNumbers.length === 0) {
         return { ok: false, reason: "missing_number", state };
       }
 
@@ -343,7 +341,12 @@
       if (cell.circled) {
         return { ok: false, reason: "already_circled", state };
       }
-      if (cell.kind === "number" && cell.value !== activeNumber) {
+      const valueUsed = cell.kind === "number"
+        ? Number(cell.value)
+        : Number.isInteger(activeNumber) && remainingNumbers.includes(activeNumber)
+          ? activeNumber
+          : Number(remainingNumbers[0]);
+      if (!Number.isInteger(valueUsed) || !remainingNumbers.includes(valueUsed)) {
         return { ok: false, reason: "number_mismatch", state };
       }
 
@@ -357,7 +360,7 @@
         ...selection,
         selectedWorkshopId: workshopId,
         workshopLocked: true,
-        remainingNumbers: this.removeSingleValue(selection.remainingNumbers, activeNumber),
+        remainingNumbers: this.removeSingleValue(remainingNumbers, valueUsed),
         placementsThisTurn: Number(selection.placementsThisTurn || 0) + 1,
       };
       selections[playerId].activeNumber = selections[playerId].remainingNumbers[0] || null;
@@ -366,10 +369,20 @@
         players: updatedPlayers,
         workshopSelections: selections,
       });
-      this.loggerService.logEvent("info", "Workshop parts circled", {
+      this.loggerService.logEvent(
+        "info",
+        "Player X added part " +
+          String(valueUsed) +
+          " in " +
+          String(workshop.id) +
+          " at R" +
+          String(rowIndex + 1) +
+          "C" +
+          String(columnIndex + 1),
+        {
         playerId,
         workshopId,
-        value: activeNumber,
+        value: valueUsed,
         rowIndex,
         columnIndex,
       });
@@ -504,7 +517,7 @@
         players,
         buildDrafts: drafts,
       });
-      this.loggerService.logEvent("info", "Mechanism built", {
+      this.loggerService.logEvent("info", "Player X finished building in " + draft.workshopId, {
         playerId,
         workshopId: draft.workshopId,
         size: draft.path.length,
@@ -584,6 +597,9 @@
       playerSelection.placementsThisTurn += 1;
       selections[playerId] = playerSelection;
       journal.completionStatus = this.isJournalComplete(journal) ? "complete" : "incomplete";
+      if (journal.completionStatus === "complete" && journal.ideaStatus === "available") {
+        journal.ideaStatus = "completed";
+      }
       player.completedJournals = player.journals.filter((item) => this.isJournalComplete(item)).length;
 
       const updatedPlayers = state.players.map((item) => (item.id === player.id ? player : item));
@@ -592,7 +608,17 @@
         journalSelections: selections,
       });
 
-      this.loggerService.logEvent("info", "Journal number placed", {
+      this.loggerService.logEvent(
+        "info",
+        "Player X added a " +
+          String(value) +
+          " in " +
+          String(journal.id) +
+          " at R" +
+          String(rowIndex + 1) +
+          "C" +
+          String(columnIndex + 1),
+        {
         playerId,
         journalId: journal.id,
         rowIndex,
@@ -803,6 +829,34 @@
           return this.completeJournalPhase(preparedState);
         }
 
+        if (state.phase === "workshop") {
+          const canBuild = this.canBuildThisTurn(state, "P1");
+          if (!canBuild) {
+            this.loggerService.logEvent("info", "Build phase skipped (not enough wrenches)", {
+              playerId: "P1",
+              required: this.getBuildCost("P1"),
+              available: this.getAvailableWrenches("P1"),
+            });
+            if (!this.hasBuiltThisTurn(state, "P1")) {
+              this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
+                playerId: "P1",
+              });
+              return this.completeTurn(state);
+            }
+            const inventState = this.gameStateService.update({ phase: "invent" });
+            return inventState;
+          }
+        }
+
+        if (state.phase === "build") {
+          if (!this.hasBuiltThisTurn(state, "P1")) {
+            this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
+              playerId: "P1",
+            });
+            return this.completeTurn(state);
+          }
+        }
+
         const nextPhase = PHASES[phaseIndex + 1];
         const updated = this.gameStateService.update({ phase: nextPhase });
         this.loggerService.logEvent("info", "Phase advanced", {
@@ -812,6 +866,12 @@
           to: nextPhase,
         });
         return updated;
+      }
+
+      if (state.phase === "invent" && !this.hasBuiltThisTurn(state, "P1")) {
+        this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
+          playerId: "P1",
+        });
       }
 
       return this.completeTurn(state);
@@ -1238,6 +1298,21 @@
         }
       }
       return edges;
+    }
+
+    canBuildThisTurn(state, playerId) {
+      return this.getAvailableWrenches(playerId) >= this.getBuildCost(playerId);
+    }
+
+    hasBuiltThisTurn(state, playerId) {
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return false;
+      }
+      return (
+        player.lastBuildAtTurn === state.turnNumber &&
+        player.lastBuildAtDay === state.currentDay
+      );
     }
 
     updateWrenchesForJournal(journal) {

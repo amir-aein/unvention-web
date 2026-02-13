@@ -62,6 +62,7 @@
         workshopSelections: {},
         workshopPhaseContext: {},
         buildDrafts: {},
+        undoHistory: [],
         rollAndGroup: {
           dice: [],
           outcomeType: null,
@@ -103,6 +104,9 @@
       }
       if (!merged.buildDrafts || typeof merged.buildDrafts !== "object") {
         merged.buildDrafts = {};
+      }
+      if (!Array.isArray(merged.undoHistory)) {
+        merged.undoHistory = [];
       }
       if (!merged.rollAndGroup || typeof merged.rollAndGroup !== "object") {
         merged.rollAndGroup = defaults.rollAndGroup;

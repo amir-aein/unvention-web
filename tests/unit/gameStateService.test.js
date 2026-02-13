@@ -38,6 +38,7 @@ test('GameStateService loads, merges defaults, and persists updates', () => {
   assert.deepEqual(loaded.workshopSelections, {});
   assert.deepEqual(loaded.workshopPhaseContext, {});
   assert.deepEqual(loaded.buildDrafts, {});
+  assert.deepEqual(loaded.undoHistory, []);
   assert.deepEqual(loaded.rollAndGroup.dice, []);
   assert.equal(loaded.rollAndGroup.outcomeType, null);
   assert.equal(loaded.logs.length, 1);
