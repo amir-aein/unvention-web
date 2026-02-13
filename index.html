@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
-    <link rel="stylesheet" href="src/css/styles.css" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css" />
   </head>
   <body>
     <main class="app">
@@ -32,7 +32,12 @@
         <ul id="log-list" class="log-list"></ul>
       </aside>
     </main>
-    <script src="src/js/logger.js"></script>
-    <script src="src/js/app.js"></script>
+    <script src="src/shared/logLevels.js"></script>
+    <script src="src/core/ports/loggerPort.js"></script>
+    <script src="src/adapters/web/inMemoryLogger.js"></script>
+    <script src="src/core/services/loggerService.js"></script>
+    <script src="src/ui/vanilla/components/logSidebar.js"></script>
+    <script src="src/app/container.js"></script>
+    <script src="src/app/bootstrap.js"></script>
   </body>
 </html>
