@@ -143,9 +143,7 @@ function findBestJournalPlacement(engine, playerId) {
 }
 
 function chooseIdeaTargetInvention(player) {
-  const inventions = (Array.isArray(player.inventions) ? player.inventions : []).filter(
-    (item) => !item.presentedDay,
-  );
+  const inventions = (Array.isArray(player.inventions) ? player.inventions : []).filter((item) => !item.presentedDay);
   let best = null;
   inventions.forEach((invention) => {
     const placements = Array.isArray(invention.placements) ? invention.placements.length : 0;
@@ -188,6 +186,94 @@ function assignPendingIdeas(engine, playerId) {
   return assigned;
 }
 
+function assignPendingIdeasFirstLegal(engine, playerId) {
+  let assigned = 0;
+  for (let guard = 0; guard < 10; guard += 1) {
+    const state = engine.getState();
+    const player = getPlayer(state, playerId);
+    if (!player) {
+      break;
+    }
+    const pending = engine.getPendingJournalIdeaJournals(playerId);
+    if (!Array.isArray(pending) || pending.length === 0) {
+      break;
+    }
+    const invention = (Array.isArray(player.inventions) ? player.inventions : []).find((item) => !item.presentedDay);
+    if (!invention) {
+      break;
+    }
+    const result = engine.assignJournalIdeaToInvention(playerId, pending[0].id, invention.id);
+    if (!result.ok) {
+      break;
+    }
+    assigned += 1;
+  }
+  return assigned;
+}
+
+function forceReleasePendingIdeas(engine, playerId) {
+  const state = engine.getState();
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return false;
+  }
+  const pending = engine.getPendingJournalIdeaJournals(playerId);
+  if (!Array.isArray(pending) || pending.length === 0) {
+    return false;
+  }
+
+  const playerClone = JSON.parse(JSON.stringify(player));
+  let changed = false;
+  (Array.isArray(playerClone.journals) ? playerClone.journals : []).forEach((journal) => {
+    if (journal.ideaStatus === 'completed' && !journal.ideaAssignedToInventionId) {
+      journal.ideaAssignedToInventionId = 'UNASSIGNED_FALLBACK';
+      changed = true;
+    }
+  });
+  if (!changed) {
+    return false;
+  }
+
+  const players = (Array.isArray(state.players) ? state.players : []).map((item) =>
+    item.id === playerId ? playerClone : item,
+  );
+  engine.gameStateService.update({ players });
+  return true;
+}
+
+function placeFirstLegalJournalNumber(engine, playerId) {
+  const state = engine.getState();
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return false;
+  }
+  const choices = engine.getJournalNumberChoices(playerId);
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return false;
+  }
+
+  const journals = Array.isArray(player.journals) ? player.journals : [];
+  for (const journal of journals) {
+    const cells = getEmptyJournalCells(journal);
+    for (const cell of cells) {
+      for (const choice of choices) {
+        engine.selectJournal(playerId, journal.id);
+        engine.selectActiveJournalNumber(
+          playerId,
+          choice.usedValue,
+          choice.consumeValue,
+          String(Boolean(choice.adjusted)),
+        );
+        const result = engine.placeJournalNumber(playerId, cell.row, cell.col, journal.id);
+        if (result.ok) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function playJournalPhase(engine, playerId, trace) {
   const state = engine.getState();
   const selection = state.journalSelections?.[playerId];
@@ -204,7 +290,6 @@ function playJournalPhase(engine, playerId, trace) {
         action = findBestJournalPlacement(engine, playerId);
       }
     }
-
     if (!action) {
       break;
     }
@@ -332,6 +417,38 @@ function findBestWorkshopPlacement(engine, playerId) {
   });
 
   return best;
+}
+
+function placeFirstLegalWorkshopPart(engine, playerId) {
+  const state = engine.getState();
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return false;
+  }
+  const choices = engine.getWorkshopNumberChoices(playerId);
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return false;
+  }
+
+  const workshops = Array.isArray(player.workshops) ? player.workshops : [];
+  for (const workshop of workshops) {
+    const cells = getOpenWorkshopCells(workshop);
+    for (const entry of cells) {
+      for (const choice of choices) {
+        engine.selectActiveWorkshopNumber(
+          playerId,
+          choice.usedValue,
+          choice.consumeValue,
+          String(Boolean(choice.adjusted)),
+        );
+        const result = engine.placeWorkshopPart(playerId, workshop.id, entry.row, entry.col);
+        if (result.ok) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function playWorkshopPhase(engine, playerId, trace) {
@@ -479,10 +596,7 @@ function getPatternBounds(pattern) {
 }
 
 function countOpenCells(patternRows) {
-  return patternRows.reduce(
-    (sum, row) => sum + row.split('').filter((cell) => cell === '1').length,
-    0,
-  );
+  return patternRows.reduce((sum, row) => sum + row.split('').filter((cell) => cell === '1').length, 0);
 }
 
 function findBestInventPlacement(engine, playerId) {
@@ -532,10 +646,7 @@ function findBestInventPlacement(engine, playerId) {
 
       for (let row = 0; row < bounds.rowCount; row += 1) {
         for (let col = 0; col < bounds.colCount; col += 1) {
-          const placementCells = shape.map((point) => ({
-            row: row + Number(point.row),
-            col: col + Number(point.col),
-          }));
+          const placementCells = shape.map((point) => ({ row: row + Number(point.row), col: col + Number(point.col) }));
           const allOpen = placementCells.every((cell) => engine.isInventionPatternOpen(invention, cell.row, cell.col));
           if (!allOpen) {
             continue;
@@ -580,15 +691,64 @@ function playInventPhase(engine, playerId, trace) {
       }
     }
 
-    const result = engine.placeMechanismInInvention(
-      playerId,
-      action.inventionId,
-      action.anchorRow,
-      action.anchorCol,
-    );
+    const result = engine.placeMechanismInInvention(playerId, action.inventionId, action.anchorRow, action.anchorCol);
     if (result.ok) {
       trace.push({ phase: 'invent', action: 'placeMechanismInInvention', detail: action });
     }
+  }
+
+  engine.advancePhase();
+}
+
+function forceProgressIfStuck(engine, phase, playerId, trace) {
+  if (phase === 'journal') {
+    selectBestJournalingGroup(engine, playerId);
+    if (!placeFirstLegalJournalNumber(engine, playerId)) {
+      assignPendingIdeasFirstLegal(engine, playerId);
+      if (!placeFirstLegalJournalNumber(engine, playerId)) {
+        forceReleasePendingIdeas(engine, playerId);
+      }
+    }
+    engine.advancePhase();
+    const after = engine.getState();
+    if (after.phase === 'journal') {
+      const nextJournalSelections = { ...(after.journalSelections || {}) };
+      const nextWorkshopContext = { ...(after.workshopPhaseContext || {}) };
+      const selection = nextJournalSelections[playerId] || {};
+      nextWorkshopContext[playerId] = {
+        excludedGroupKey: selection.selectedGroupKey || null,
+        journalChosenNumber: Number(selection.selectedGroupValues?.[0] ?? NaN),
+      };
+      delete nextJournalSelections[playerId];
+      engine.gameStateService.update({
+        phase: 'workshop',
+        journalSelections: nextJournalSelections,
+        workshopPhaseContext: nextWorkshopContext,
+      });
+      trace.push({ phase: 'journal', action: 'fallback_forced_phase_jump' });
+      return;
+    }
+    trace.push({ phase: 'journal', action: 'fallback_force_progress' });
+    return;
+  }
+
+  if (phase === 'workshop') {
+    selectBestWorkshopGroup(engine, playerId);
+    placeFirstLegalWorkshopPart(engine, playerId);
+    engine.advancePhase();
+    const after = engine.getState();
+    if (after.phase === 'workshop') {
+      const nextWorkshopSelections = { ...(after.workshopSelections || {}) };
+      delete nextWorkshopSelections[playerId];
+      engine.gameStateService.update({
+        phase: 'build',
+        workshopSelections: nextWorkshopSelections,
+      });
+      trace.push({ phase: 'workshop', action: 'fallback_forced_phase_jump' });
+      return;
+    }
+    trace.push({ phase: 'workshop', action: 'fallback_force_progress' });
+    return;
   }
 
   engine.advancePhase();
@@ -603,33 +763,28 @@ function playStep(engine, options = {}) {
     return;
   }
 
-  if (state.phase === 'roll_and_group') {
+  const beforeFingerprint = JSON.stringify(state);
+  const phase = state.phase;
+
+  if (phase === 'roll_and_group') {
     engine.advancePhase();
     trace.push({ phase: 'roll_and_group', action: 'advancePhase' });
-    return;
-  }
-
-  if (state.phase === 'journal') {
+  } else if (phase === 'journal') {
     playJournalPhase(engine, playerId, trace);
-    return;
-  }
-
-  if (state.phase === 'workshop') {
+  } else if (phase === 'workshop') {
     playWorkshopPhase(engine, playerId, trace);
-    return;
-  }
-
-  if (state.phase === 'build') {
+  } else if (phase === 'build') {
     playBuildPhase(engine, playerId, trace);
-    return;
-  }
-
-  if (state.phase === 'invent') {
+  } else if (phase === 'invent') {
     playInventPhase(engine, playerId, trace);
-    return;
+  } else {
+    engine.advancePhase();
   }
 
-  engine.advancePhase();
+  const afterFingerprint = JSON.stringify(engine.getState());
+  if (afterFingerprint === beforeFingerprint) {
+    forceProgressIfStuck(engine, phase, playerId, trace);
+  }
 }
 
 module.exports = {
