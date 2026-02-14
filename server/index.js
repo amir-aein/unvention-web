@@ -21,9 +21,47 @@ const connectionsById = new Map();
 
 ensureLogPath();
 
-const httpServer = http.createServer((_req, res) => {
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ ok: true, service: "unvention-multiplayer", rooms: rooms.size }));
+const httpServer = http.createServer((req, res) => {
+  if (String(req.method || "").toUpperCase() === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    });
+    res.end();
+    return;
+  }
+  const roomList = Array.from(rooms.values())
+    .map((room) => ({
+      code: room.code,
+      status: room.status,
+      playerCount: Array.isArray(room.players) ? room.players.length : 0,
+      maxPlayers: Number(room.maxPlayers || MAX_PLAYERS),
+      hostPlayerId: String(room.hostPlayerId || ""),
+      hostName: String(
+        (Array.isArray(room.players) ? room.players : []).find((player) => player.playerId === room.hostPlayerId)?.name || "Host",
+      ),
+      createdAt: Number(room.createdAt || Date.now()),
+      updatedAt: Number(room.updatedAt || Date.now()),
+      joinable:
+        room.status === "lobby" &&
+        Array.isArray(room.players) &&
+        room.players.length < Number(room.maxPlayers || MAX_PLAYERS),
+    }))
+    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  res.writeHead(200, {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "content-type",
+  });
+  res.end(JSON.stringify({
+    ok: true,
+    service: "unvention-multiplayer",
+    rooms: rooms.size,
+    roomList,
+    serverTime: Date.now(),
+  }));
 });
 const wss = new WebSocketServer({ server: httpServer });
 
@@ -96,6 +134,10 @@ function handleClientMessage(ws, message) {
   }
   if (type === "end_turn") {
     onEndTurn(ws, message);
+    return;
+  }
+  if (type === "cancel_end_turn") {
+    onCancelEndTurn(ws, message);
     return;
   }
   if (type === "request_sync") {
@@ -365,6 +407,47 @@ function onEndTurn(ws, message) {
     return;
   }
 
+  broadcastRoomState(room);
+}
+
+function onCancelEndTurn(ws, message) {
+  const room = getRoomForConnection(ws);
+  if (!room) {
+    send(ws, "error", { code: "not_in_room", message: "Join a room first." });
+    return;
+  }
+  if (room.status !== "in_game") {
+    send(ws, "error", { code: "game_not_started", message: "Host must start game first." });
+    return;
+  }
+  const player = room.players.find((item) => item.playerId === ws.meta.playerId);
+  if (!player) {
+    return;
+  }
+  const claimedTurn = Number(message?.payload?.turnNumber || room.turn.number);
+  const claimedDay = String(message?.payload?.day || room.turn.day);
+  if (claimedTurn !== Number(room.turn.number) || claimedDay !== String(room.turn.day)) {
+    send(ws, "error", {
+      code: "turn_mismatch",
+      message: "Cancel request does not match room turn.",
+      expectedTurn: room.turn.number,
+      expectedDay: room.turn.day,
+    });
+    return;
+  }
+  if (!player.endedTurn) {
+    broadcastRoomState(room);
+    return;
+  }
+  player.endedTurn = false;
+  player.turnSummary = null;
+  player.lastSeenAt = Date.now();
+  room.updatedAt = Date.now();
+  appendActionLog(room.code, "cancel_end_turn", {
+    playerId: player.playerId,
+    turnNumber: room.turn.number,
+    day: room.turn.day,
+  });
   broadcastRoomState(room);
 }
 

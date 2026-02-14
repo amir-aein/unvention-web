@@ -77,6 +77,31 @@ body {
   gap: 0.35rem;
 }
 
+.mp-room-directory {
+  margin-top: 0.35rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.35rem;
+}
+
+.mp-room-directory__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.25rem;
+  font-size: 0.76rem;
+}
+
+.mp-room-directory__table th,
+.mp-room-directory__table td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.2rem 0.25rem;
+  text-align: left;
+}
+
+.mp-room-directory__table th:last-child,
+.mp-room-directory__table td:last-child {
+  text-align: right;
+}
+
 .mp-room-panel {
   margin-top: 0.55rem;
   border-top: 1px solid #e2e8f0;
@@ -960,6 +985,11 @@ body {
   cursor: not-allowed;
 }
 
+.journal-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .journal-muted {
   color: var(--muted);
   font-size: 0.78rem;
@@ -1178,6 +1208,15 @@ input[type="text"] {
 
 button:hover {
   background: #f3f4f6;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  background: #f9fafb;
 }
 
 .log-sidebar {
@@ -1538,6 +1577,22 @@ button:hover {
 .journal-controls--header .journal-chip--group:hover {
   background: #0284c7;
   border-color: #38bdf8;
+}
+
+.journal-controls--header .journal-chip:disabled,
+.journal-controls--header .journal-chip--group:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #1f2937;
+  border-color: #475569;
+  color: #94a3b8;
+}
+
+.journal-controls--header .journal-chip:disabled:hover,
+.journal-controls--header .journal-chip--group:disabled:hover {
+  background: #1f2937;
+  border-color: #475569;
+  color: #94a3b8;
 }
 
 .journal-controls--header .journal-control-row strong {

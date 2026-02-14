@@ -25,8 +25,23 @@
             <button id="mp-connect" type="button">Connect</button>
             <button id="mp-create-room" type="button">Create Room</button>
             <button id="mp-join-room" type="button">Join Room</button>
+            <button id="mp-refresh-rooms" type="button">Refresh Rooms</button>
           </div>
           <p id="mp-connection-status" class="mp-status-line">Offline</p>
+          <div id="mp-room-directory" class="mp-room-directory">
+            <p class="mp-status-line">Available Rooms</p>
+            <table class="mp-room-directory__table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Players</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="mp-room-directory-body"></tbody>
+            </table>
+          </div>
         </div>
         <button id="start-new-game" type="button">New Game</button>
       </div>
