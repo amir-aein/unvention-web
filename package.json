@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "start": "node server/index.js",
     "test": "node --test",
     "test:watch": "node --test --watch",
     "simulate": "node sim/runner.js",

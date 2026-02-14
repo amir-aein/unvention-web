@@ -1,18 +1,23 @@
-# Multiplayer Server (MVP)
+# Web + Multiplayer Server (Single Host)
 
 ## Run
 
 1. Install dependencies:
    `npm install`
 2. Start server:
-   `npm run server`
+   `npm start`
 3. Optional custom port:
-   `PORT=8090 npm run server`
+   `PORT=8090 npm start`
 4. Smoke test (in another terminal):
    `npm run server:smoke`
 
-Server health check:
-`GET http://localhost:8080/`
+Open app locally:
+`http://localhost:8080/`
+
+Server endpoints:
+- `GET /health` health check
+- `GET /api/rooms` room directory payload for multiplayer lobby
+- `GET /` and static files from project root (serves `index.html`)
 
 ## Protocol
 

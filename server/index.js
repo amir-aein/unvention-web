@@ -5,6 +5,7 @@ const http = require("node:http");
 const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
+const PROJECT_ROOT = path.resolve(__dirname, "..");
 const MAX_PLAYERS = 5;
 const RECONNECT_WINDOW_MS = 15 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 10 * 1000;
@@ -23,7 +24,10 @@ const connectionsById = new Map();
 ensureLogPath();
 
 const httpServer = http.createServer((req, res) => {
-  if (String(req.method || "").toUpperCase() === "OPTIONS") {
+  const method = String(req.method || "").toUpperCase();
+  const url = safeParseUrl(req.url);
+  const pathname = url?.pathname || "/";
+  if (method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET, OPTIONS",
@@ -32,37 +36,41 @@ const httpServer = http.createServer((req, res) => {
     res.end();
     return;
   }
-  const roomList = Array.from(rooms.values())
-    .map((room) => ({
-      code: room.code,
-      status: room.status,
-      playerCount: Array.isArray(room.players) ? room.players.length : 0,
-      maxPlayers: Number(room.maxPlayers || MAX_PLAYERS),
-      hostPlayerId: String(room.hostPlayerId || ""),
-      hostName: String(
-        (Array.isArray(room.players) ? room.players : []).find((player) => player.playerId === room.hostPlayerId)?.name || "Host",
-      ),
-      createdAt: Number(room.createdAt || Date.now()),
-      updatedAt: Number(room.updatedAt || Date.now()),
-      joinable:
-        room.status === "lobby" &&
-        Array.isArray(room.players) &&
-        room.players.length < Number(room.maxPlayers || MAX_PLAYERS),
-    }))
-    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
-  res.writeHead(200, {
-    "content-type": "application/json",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, OPTIONS",
-    "access-control-allow-headers": "content-type",
-  });
-  res.end(JSON.stringify({
-    ok: true,
-    service: "unvention-multiplayer",
-    rooms: rooms.size,
-    roomList,
-    serverTime: Date.now(),
-  }));
+
+  if (method === "GET" && pathname === "/health") {
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(JSON.stringify({
+      ok: true,
+      service: "unvention-multiplayer",
+      rooms: rooms.size,
+      serverTime: Date.now(),
+    }));
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/rooms") {
+    const payload = buildRoomDirectoryPayload();
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    });
+    res.end(JSON.stringify(payload));
+    return;
+  }
+
+  if (method !== "GET" && method !== "HEAD") {
+    res.writeHead(405, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+    return;
+  }
+
+  serveStaticAsset(pathname, res, method === "HEAD");
 });
 const wss = new WebSocketServer({ server: httpServer });
 
@@ -1097,4 +1105,106 @@ function appendActionLog(roomCode, type, payload) {
     payload: payload || {},
   };
   fs.appendFile(ACTION_LOG_PATH, JSON.stringify(entry) + "\n", () => {});
+}
+
+function buildRoomDirectoryPayload() {
+  const roomList = Array.from(rooms.values())
+    .map((room) => ({
+      code: room.code,
+      status: room.status,
+      playerCount: Array.isArray(room.players) ? room.players.length : 0,
+      maxPlayers: Number(room.maxPlayers || MAX_PLAYERS),
+      hostPlayerId: String(room.hostPlayerId || ""),
+      hostName: String(
+        (Array.isArray(room.players) ? room.players : []).find((player) => player.playerId === room.hostPlayerId)?.name || "Host",
+      ),
+      createdAt: Number(room.createdAt || Date.now()),
+      updatedAt: Number(room.updatedAt || Date.now()),
+      joinable:
+        room.status === "lobby" &&
+        Array.isArray(room.players) &&
+        room.players.length < Number(room.maxPlayers || MAX_PLAYERS),
+    }))
+    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  return {
+    ok: true,
+    service: "unvention-multiplayer",
+    rooms: rooms.size,
+    roomList,
+    serverTime: Date.now(),
+  };
+}
+
+function safeParseUrl(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "/"), "http://localhost");
+  } catch (_error) {
+    return null;
+  }
+}
+
+function serveStaticAsset(pathnameInput, res, headOnly) {
+  const pathname = String(pathnameInput || "/");
+  const normalized = pathname === "/" ? "/index.html" : pathname;
+  const relativePath = normalized.replace(/^\/+/, "");
+  const assetPath = path.resolve(PROJECT_ROOT, relativePath);
+  if (!assetPath.startsWith(PROJECT_ROOT + path.sep) && assetPath !== PROJECT_ROOT) {
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+    if (!headOnly) {
+      res.end("Forbidden");
+    } else {
+      res.end();
+    }
+    return;
+  }
+
+  fs.stat(assetPath, (error, stat) => {
+    if (error || !stat.isFile()) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      if (!headOnly) {
+        res.end("Not Found");
+      } else {
+        res.end();
+      }
+      return;
+    }
+    const ext = path.extname(assetPath).toLowerCase();
+    res.writeHead(200, {
+      "content-type": getContentType(ext),
+      "cache-control": ext === ".html" ? "no-cache" : "public, max-age=600",
+    });
+    if (headOnly) {
+      res.end();
+      return;
+    }
+    fs.createReadStream(assetPath).pipe(res);
+  });
+}
+
+function getContentType(ext) {
+  if (ext === ".html") {
+    return "text/html; charset=utf-8";
+  }
+  if (ext === ".css") {
+    return "text/css; charset=utf-8";
+  }
+  if (ext === ".js") {
+    return "application/javascript; charset=utf-8";
+  }
+  if (ext === ".json") {
+    return "application/json; charset=utf-8";
+  }
+  if (ext === ".svg") {
+    return "image/svg+xml";
+  }
+  if (ext === ".png") {
+    return "image/png";
+  }
+  if (ext === ".jpg" || ext === ".jpeg") {
+    return "image/jpeg";
+  }
+  if (ext === ".pdf") {
+    return "application/pdf";
+  }
+  return "application/octet-stream";
 }

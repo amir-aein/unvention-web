@@ -253,7 +253,7 @@
 
   function getDefaultMultiplayerState() {
     return {
-      url: "ws://localhost:8080",
+      url: inferDefaultMultiplayerUrl(),
       name: "",
       roomCode: "",
       playerId: "",
@@ -264,6 +264,18 @@
       lastError: "",
       connectionId: "",
     };
+  }
+
+  function inferDefaultMultiplayerUrl() {
+    if (typeof globalScope.location !== "undefined") {
+      const protocol = String(globalScope.location.protocol || "").toLowerCase();
+      const host = String(globalScope.location.host || "").trim();
+      if (host && (protocol === "http:" || protocol === "https:")) {
+        const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+        return wsProtocol + "//" + host;
+      }
+    }
+    return "ws://localhost:8080";
   }
 
   function persistMultiplayerState() {
@@ -384,12 +396,12 @@
   }
 
   function toRoomDirectoryUrl(inputUrl) {
-    const fallback = "http://localhost:8080/";
+    const fallback = "http://localhost:8080/api/rooms";
     try {
       const raw = String(inputUrl || "").trim() || "ws://localhost:8080";
       const parsed = new URL(raw);
       const protocol = parsed.protocol === "wss:" ? "https:" : "http:";
-      return protocol + "//" + parsed.host + "/";
+      return protocol + "//" + parsed.host + "/api/rooms";
     } catch (_error) {
       return fallback;
     }
