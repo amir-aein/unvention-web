@@ -5,7 +5,8 @@
   const MAX_UNDO_SNAPSHOTS = 20;
   const MAX_PERSISTED_UNDO_SNAPSHOTS = 6;
   const MAX_SNAPSHOT_LOG_ENTRIES = 80;
-  const ROLL_PHASE_DURATION_MS = 4000;
+  const ROLL_REVEAL_DELAY_MS = 1000;
+  const ROLL_REVEAL_SLIDE_MS = 420;
   const loggerService = container.loggerService;
   const gameStateService = container.gameStateService;
   const roundEngineService = container.roundEngineService;
@@ -39,10 +40,12 @@
   let inventionHover = null;
   let inventionVarietyHover = null;
   let lastAutoScrolledPhase = "";
-  let rollPhaseAutoTimeout = null;
-  let rollPhaseTicker = null;
+  let rollPhaseRevealTimeout = null;
+  let rollPhaseAdvanceTimeout = null;
   let rollPhaseKey = "";
-  let rollPhaseStartedAt = 0;
+  let rollRevealVisibleKey = "";
+  let rollRevealAnimatedKey = "";
+  let pendingToolUnlocks = [];
   let workspaceScrollBound = false;
   let renderRecoveryInProgress = false;
 
@@ -326,7 +329,22 @@
     const outcomeType = String(state.rollAndGroup?.outcomeType || "");
     if (dice.length === 0) {
       container.innerHTML = "<span class='journal-muted'>Waiting for roll and group phase.</span>";
+      container.className = "round-roll-container";
       return;
+    }
+    const rollKey = String(state.rollAndGroup?.rolledAtDay || "") + ":" + String(state.rollAndGroup?.rolledAtTurn || "");
+    const waitingForReveal = state.phase === "roll_and_group" && rollRevealVisibleKey !== rollKey;
+    if (waitingForReveal) {
+      container.innerHTML = "<span class='journal-muted'>Rolling and grouping outcomes...</span>";
+      container.className = "round-roll-container round-roll-container--pending";
+      return;
+    }
+    const shouldSlideIn =
+      state.phase === "roll_and_group" &&
+      rollRevealVisibleKey === rollKey &&
+      rollRevealAnimatedKey !== rollKey;
+    if (shouldSlideIn) {
+      rollRevealAnimatedKey = rollKey;
     }
     const diceChips = dice
       .map((value) => '<span class="round-roll-chip">' + String(value) + "</span>")
@@ -345,6 +363,8 @@
       '<span class="round-roll-chip">' +
       outcomeType.replaceAll("_", " ") +
       "</span>";
+    container.className =
+      "round-roll-container" + (shouldSlideIn ? " round-roll-container--slide-in" : "");
   }
 
   function getActiveAnchorIdForPhase(phase) {
@@ -480,6 +500,7 @@
       setGameSurfaceVisibility(started);
       if (!started) {
         clearRollPhaseTimers();
+        pendingToolUnlocks = [];
         return;
       }
       if (typeof roundEngineService.ensurePlayerInventions === "function") {
@@ -598,18 +619,26 @@
       return;
     }
 
+    if (pendingToolUnlocks.length > 0) {
+      const unlockedNames = pendingToolUnlocks.map((tool) => String(tool?.name || "")).filter(Boolean);
+      controls.innerHTML =
+        "<div class='journal-control-row'><strong>Tool unlocked</strong></div>" +
+        "<div class='journal-control-row'><span class='journal-muted'>You unlocked " +
+        (unlockedNames.length > 0 ? unlockedNames.join(", ") : "a new tool") +
+        ".</span></div>" +
+        '<div class="journal-control-row">' +
+        '<button type="button" class="journal-chip journal-chip--group" data-action="confirm-tool-unlock">Confirm</button>' +
+        "</div>";
+      if (controls.style) {
+        controls.style.display = "grid";
+      }
+      return;
+    }
+
     if (state.phase === "roll_and_group") {
-      const elapsed = rollPhaseStartedAt > 0 ? Math.max(0, Date.now() - rollPhaseStartedAt) : 0;
-      const remaining = Math.max(0, ROLL_PHASE_DURATION_MS - elapsed);
-      const percent = Math.max(0, Math.min(100, (remaining / ROLL_PHASE_DURATION_MS) * 100));
       controls.innerHTML =
         "<div class='journal-control-row'>" +
-        "<span class='journal-muted'>Rolling dice and grouping outcomes...</span>" +
-        "</div>" +
-        "<div class='roll-phase-timer'>" +
-        '<span class="roll-phase-timer__track"><span class="roll-phase-timer__fill" style="width:' +
-        String(percent) +
-        '%;"></span></span>' +
+        "<span class='journal-muted'>Rolling and grouping outcomes...</span>" +
         "</div>";
       if (controls.style) {
         controls.style.display = "grid";
@@ -907,21 +936,22 @@
   }
 
   function clearRollPhaseTimers() {
-    if (rollPhaseAutoTimeout) {
-      globalScope.clearTimeout(rollPhaseAutoTimeout);
-      rollPhaseAutoTimeout = null;
+    if (rollPhaseRevealTimeout) {
+      globalScope.clearTimeout(rollPhaseRevealTimeout);
+      rollPhaseRevealTimeout = null;
     }
-    if (rollPhaseTicker) {
-      globalScope.clearInterval(rollPhaseTicker);
-      rollPhaseTicker = null;
+    if (rollPhaseAdvanceTimeout) {
+      globalScope.clearTimeout(rollPhaseAdvanceTimeout);
+      rollPhaseAdvanceTimeout = null;
     }
-    rollPhaseStartedAt = 0;
+    rollRevealVisibleKey = "";
+    rollRevealAnimatedKey = "";
     rollPhaseKey = "";
   }
 
   function maybeAutoResolveRollPhase(state) {
     if (state.phase !== "roll_and_group") {
-      if (rollPhaseAutoTimeout || rollPhaseTicker) {
+      if (rollPhaseRevealTimeout || rollPhaseAdvanceTimeout) {
         clearRollPhaseTimers();
       }
       return;
@@ -939,32 +969,77 @@
       }
       state = roundEngineService.getState();
     }
-    if (rollPhaseKey === key && rollPhaseAutoTimeout) {
+    if (rollPhaseKey === key) {
       return;
     }
     clearRollPhaseTimers();
     rollPhaseKey = key;
-    rollPhaseStartedAt = Date.now();
-    rollPhaseTicker = globalScope.setInterval(() => {
+    rollRevealAnimatedKey = "";
+    rollPhaseRevealTimeout = globalScope.setTimeout(() => {
       const current = roundEngineService.getState();
       if (current.phase !== "roll_and_group") {
         clearRollPhaseTimers();
         return;
       }
-      renderPhaseControls(current);
-    }, 40);
-    rollPhaseAutoTimeout = globalScope.setTimeout(() => {
-      const current = roundEngineService.getState();
-      if (
-        current.phase === "roll_and_group" &&
-        String(current.currentDay) + ":" + String(current.turnNumber) === key
-      ) {
-        roundEngineService.advancePhase();
-        renderState();
-      } else {
-        clearRollPhaseTimers();
-      }
-    }, ROLL_PHASE_DURATION_MS);
+      rollRevealVisibleKey = key;
+      renderState();
+      rollPhaseAdvanceTimeout = globalScope.setTimeout(() => {
+        const latest = roundEngineService.getState();
+        if (
+          latest.phase === "roll_and_group" &&
+          String(latest.currentDay) + ":" + String(latest.turnNumber) === key
+        ) {
+          roundEngineService.advancePhase();
+          renderState();
+        } else {
+          clearRollPhaseTimers();
+        }
+      }, ROLL_REVEAL_SLIDE_MS);
+    }, ROLL_REVEAL_DELAY_MS);
+  }
+
+  function resolvePendingToolUnlockPrompt() {
+    if (pendingToolUnlocks.length === 0) {
+      return;
+    }
+    pendingToolUnlocks = [];
+    const state = roundEngineService.getState();
+    if (state.phase === "build") {
+      roundEngineService.advancePhase();
+    }
+  }
+
+  function captureUnlockedToolsFromBuildResult(buildResult) {
+    if (!buildResult || !buildResult.ok) {
+      return;
+    }
+    const unlocked = Array.isArray(buildResult.unlockedTools)
+      ? buildResult.unlockedTools
+      : [];
+    if (unlocked.length > 0) {
+      pendingToolUnlocks = unlocked;
+      return;
+    }
+    const current = roundEngineService.getState();
+    if (current.phase === "build") {
+      roundEngineService.advancePhase();
+    }
+  }
+
+  function shouldDeferActionsForUnlockPrompt() {
+    return pendingToolUnlocks.length > 0;
+  }
+
+  function maybeBlockActionForUnlockPrompt(action) {
+    if (!shouldDeferActionsForUnlockPrompt()) {
+      return false;
+    }
+    if (action === "confirm-tool-unlock") {
+      resolvePendingToolUnlockPrompt();
+      renderState();
+      return true;
+    }
+    return true;
   }
 
   function renderPlayerStatePanel(state, player) {
@@ -2068,6 +2143,10 @@
     }
 
     const action = target.getAttribute("data-action");
+    if (maybeBlockActionForUnlockPrompt(action)) {
+      return;
+    }
+
     if (action === "select-group") {
       runWithUndo(() => {
         roundEngineService.selectJournalingGroup(activePlayerId, target.getAttribute("data-group-key"));
@@ -2101,9 +2180,7 @@
       runWithUndo(() => {
         setBuildDecision("accepted");
         const built = roundEngineService.finishBuildingMechanism(activePlayerId);
-        if (built && built.ok) {
-          roundEngineService.advancePhase();
-        }
+        captureUnlockedToolsFromBuildResult(built);
       });
       renderState();
       return;
