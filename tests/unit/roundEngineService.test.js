@@ -478,7 +478,7 @@ test('RoundEngineService excludes journaling group from workshop options', () =>
   assert.equal(options[0].key, 'group-1');
 });
 
-test('RoundEngineService allows the same number in workshop after eureka journaling', () => {
+test('RoundEngineService allows direct any-part workshop placement on eureka', () => {
   const harness = createHarness({}, () => [1, 2, 3, 4, 5]);
   harness.engine.initializePlayers(['P1']);
   harness.engine.ensureJournalRoll();
@@ -489,10 +489,21 @@ test('RoundEngineService allows the same number in workshop after eureka journal
   harness.engine.advancePhase();
 
   const options = harness.engine.getWorkshoppingOptions('P1');
-  const includesThree = options.some(
-    (option) => option.values.length === 1 && option.values[0] === 3,
-  );
-  assert.equal(includesThree, true);
+  assert.equal(options.length, 1);
+  assert.equal(options[0].key, 'workshop-eureka-any');
+  assert.equal(harness.engine.getWorkshopNumberChoices('P1').length, 0);
+
+  const placed = harness.engine.placeWorkshopPart('P1', 'W4', 0, 1);
+  assert.equal(placed.ok, true);
+
+  const state = harness.getState();
+  const selection = state.workshopSelections?.P1 || {};
+  assert.equal(Number(selection.placementsThisTurn || 0), 1);
+  assert.deepEqual(selection.remainingNumbers || [], []);
+
+  const second = harness.engine.placeWorkshopPart('P1', 'W1', 0, 1);
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'missing_number');
 });
 
 test('RoundEngineService applies Flywheel build cost reduction when tool is active', () => {

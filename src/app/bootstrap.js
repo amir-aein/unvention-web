@@ -513,16 +513,6 @@
           "Room " + String(room.code) + " | " + String(room.status || "lobby") + " | Host " + String(room.hostPlayerId || "-");
       }
     }
-    const rollNode = document.getElementById("mp-turn-roll");
-    if (rollNode) {
-      rollNode.style.display = isSoloOnlySession ? "none" : "";
-      if (!room) {
-        rollNode.textContent = "Turn: - | Roll: -";
-      } else {
-        const rollValues = Array.isArray(room.turn?.roll) ? room.turn.roll.join(", ") : "-";
-        rollNode.textContent = "Turn: " + String(room.turn?.number || "-") + " (" + String(room.turn?.day || "-") + ") | Roll: " + rollValues;
-      }
-    }
     const playerList = document.getElementById("mp-player-list");
     const waitroomPlayerTableBody = document.getElementById("waitroom-player-table-body");
     const players = Array.isArray(room?.players) ? room.players : [];
@@ -560,16 +550,6 @@
     }
 
     const canRoomAction = Boolean(room && multiplayerState.connected);
-    const startButton = document.getElementById("mp-start-game");
-    const leaveButton = document.getElementById("mp-leave-room");
-    if (startButton) {
-      startButton.style.display = isSoloOnlySession ? "none" : "";
-      startButton.disabled = !canRoomAction || room.status !== "lobby" || !isLocalPlayerHost();
-    }
-    if (leaveButton) {
-      leaveButton.style.display = isSoloOnlySession ? "none" : "";
-      leaveButton.disabled = !canRoomAction;
-    }
     const resetButton = document.getElementById("reset-game");
     if (resetButton) {
       resetButton.disabled = hasActiveMultiplayerRoom() && !isLocalPlayerHost();
@@ -722,6 +702,15 @@
       return String(match.name || "").trim();
     }
     return playerId;
+  }
+
+  function renderPlayerStateTitle() {
+    const titleNode = document.getElementById("player-state-title");
+    if (!titleNode) {
+      return;
+    }
+    const name = resolvePlayerName(activePlayerId);
+    titleNode.textContent = name || "You";
   }
 
   function logPlayerAction(message, contextInput) {
@@ -1526,8 +1515,12 @@
 
   function renderRoundRoll(state) {
     const container = document.getElementById("round-roll-container");
+    const title = document.getElementById("round-roll-title");
     if (!container) {
       return;
+    }
+    if (title) {
+      title.textContent = "Turn " + String(state?.turnNumber || "-") + ": Dice Groups";
     }
     const dice = Array.isArray(state.rollAndGroup?.dice) ? state.rollAndGroup.dice : [];
     const groups = Array.isArray(state.rollAndGroup?.groups) ? state.rollAndGroup.groups : [];
@@ -1703,6 +1696,7 @@
   function renderState() {
     try {
       renderMultiplayerUi();
+      renderPlayerStateTitle();
       const state = roundEngineService.getState();
       const started = isGameStarted(state);
       setGameSurfaceVisibility(started);
@@ -2102,6 +2096,7 @@
       const selection = state.workshopSelections?.[activePlayerId];
       const options = roundEngineService.getWorkshoppingOptions(activePlayerId);
       const selectedGroupKey = selection?.selectedGroupKey || "";
+      const isEurekaWorkshop = state.rollAndGroup?.outcomeType === "eureka";
       const availableWrenches =
         typeof roundEngineService.getAvailableWrenches === "function"
           ? roundEngineService.getAvailableWrenches(activePlayerId)
@@ -2158,7 +2153,13 @@
         : "<span class='journal-muted'>No numbers remaining.</span>";
 
       let html = "";
-      if (!selectedGroupKey) {
+      if (isEurekaWorkshop) {
+        html = '<div class="journal-control-row journal-control-row--prominent">' +
+          "<span class='journal-muted'>Eureka: choose any one workshop part.</span>" +
+          wrenchButton +
+          '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
+          "</div>";
+      } else if (!selectedGroupKey) {
         html = '<div class="journal-control-row journal-control-row--prominent">' +
           groupButtons +
           wrenchButton +
@@ -2619,6 +2620,7 @@
     };
     const byId = new Map(player.workshops.map((workshop) => [workshop.id, workshop]));
     const selection = state.workshopSelections?.[activePlayerId];
+    const isEurekaWorkshop = state.phase === "workshop" && state.rollAndGroup?.outcomeType === "eureka";
     const allowedWorkshopValues =
       state.phase === "workshop"
         ? (
@@ -2643,7 +2645,7 @@
           typeof roundEngineService.hasTool === "function"
             ? roundEngineService.hasTool(activePlayerId, "T4")
             : false;
-        const workshopLockedOut = !hasReamer && Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
+        const workshopLockedOut = !isEurekaWorkshop && !hasReamer && Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
         const activeNumber = Number(selection?.activeNumber);
         const buildDraft = state.buildDrafts?.[activePlayerId];
         const isBuildPhase = state.phase === "build";
@@ -2683,10 +2685,11 @@
                     : "";
                 const canMatchActive =
                   state.phase === "workshop" &&
-                  selection?.selectedGroupKey &&
+                  (isEurekaWorkshop || selection?.selectedGroupKey) &&
                   !workshopLockedOut &&
                   !cell.circled &&
                   (
+                    isEurekaWorkshop ||
                     cell.kind === "wild" ||
                     (cell.kind === "number" && allowedWorkshopValues.includes(Number(cell.value)))
                   );
@@ -3551,27 +3554,6 @@
     : null;
   if (homeModeFlow && typeof homeModeFlow.bindHomeControls === "function") {
     homeModeFlow.bindHomeControls();
-  }
-
-  const mpStartGameButton = document.getElementById("mp-start-game");
-  if (mpStartGameButton) {
-    mpStartGameButton.addEventListener("click", function onStartRoomGame() {
-      multiplayerClient.send("start_game");
-    });
-  }
-
-  const mpLeaveButton = document.getElementById("mp-leave-room");
-  if (mpLeaveButton) {
-    mpLeaveButton.addEventListener("click", function onLeaveRoom() {
-      const confirmed = typeof globalScope.confirm === "function"
-        ? globalScope.confirm("Leave this multiplayer room?")
-        : true;
-      if (!confirmed) {
-        return;
-      }
-      multiplayerClient.send("leave_room");
-      teardownMultiplayerSession("Left multiplayer room");
-    });
   }
 
   const waitroomUpdateNameButton = document.getElementById("waitroom-update-name");

@@ -108,7 +108,7 @@
         </div>
 
         <section id="round-roll-panel" class="round-roll-panel" aria-label="Current round roll">
-          <h2>Current Turn Roll</h2>
+          <h2 id="round-roll-title">Turn -: Dice Groups</h2>
           <div id="round-roll-container" class="round-roll-container"></div>
         </section>
         <section id="journals-panel" class="journals-panel" aria-label="Player journals">
@@ -131,15 +131,10 @@
 
       <aside class="log-sidebar" aria-label="Action log">
         <section id="player-state-panel" class="player-state-panel" aria-label="Player status">
-          <h3>Summary</h3>
+          <h3 id="player-state-title">You</h3>
           <div id="player-state-summary" class="player-state-summary"></div>
           <div id="mp-room-panel" class="mp-room-panel">
             <p id="mp-room-status" class="mp-status-line">No room joined.</p>
-            <p id="mp-turn-roll" class="mp-status-line">Turn: - | Roll: -</p>
-            <div class="mp-room-panel__buttons">
-              <button id="mp-start-game" type="button">Start Room Game</button>
-              <button id="mp-leave-room" type="button" class="button-destructive">Leave Room</button>
-            </div>
             <ul id="mp-player-list" class="mp-player-list"></ul>
           </div>
           <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
@@ -172,6 +167,6 @@
     <script src="src/app/container.js"></script>
     <script src="src/app/flows/soloFlow.js"></script>
     <script src="src/app/flows/homeModeFlow.js"></script>
-    <script src="src/app/bootstrap.js?v=20260214-8"></script>
+    <script src="src/app/bootstrap.js?v=20260214-10"></script>
   </body>
 </html>

@@ -396,12 +396,13 @@
 
       const context = state.workshopPhaseContext?.[playerId] || {};
       if (outcomeType === "eureka") {
-        return [1, 2, 3, 4, 5, 6]
-          .map((value, index) => ({
-            key: "workshop-eureka-" + String(index),
-            label: String(value),
-            values: [value],
-          }));
+        return [
+          {
+            key: "workshop-eureka-any",
+            label: "Any part",
+            values: [0],
+          },
+        ];
       }
 
       const groups = Array.isArray(rollState.groups) ? rollState.groups : [];
@@ -505,6 +506,9 @@
 
     getWorkshopNumberChoices(playerId) {
       const state = this.gameStateService.getState();
+      if (state.phase === "workshop" && state.rollAndGroup?.outcomeType === "eureka") {
+        return [];
+      }
       const selection = state.workshopSelections?.[playerId];
       const remaining = Array.isArray(selection?.remainingNumbers) ? selection.remainingNumbers : [];
       const direct = remaining.map((value, index) => ({
@@ -790,9 +794,13 @@
       if (state.phase !== "workshop") {
         return { ok: false, reason: "invalid_phase", state };
       }
+      const isEurekaWorkshop = state.rollAndGroup?.outcomeType === "eureka";
       const selection = state.workshopSelections?.[playerId];
-      if (!selection?.selectedGroupValues?.length) {
+      if (!isEurekaWorkshop && !selection?.selectedGroupValues?.length) {
         return { ok: false, reason: "missing_selection", state };
+      }
+      if (isEurekaWorkshop && Number(selection?.placementsThisTurn || 0) >= 1) {
+        return { ok: false, reason: "missing_number", state };
       }
       const player = this.findPlayer(state, playerId);
       if (!player) {
@@ -804,22 +812,12 @@
       }
 
       if (
+        !isEurekaWorkshop &&
         !this.hasTool(playerId, "T4") &&
         selection.selectedWorkshopId &&
         selection.selectedWorkshopId !== workshopId
       ) {
         return { ok: false, reason: "workshop_locked", state };
-      }
-
-      const activePick = selection.activePick || {
-        usedValue: Number(selection.activeNumber),
-        consumeValue: Number(selection.activeNumber),
-        adjusted: false,
-      };
-      const activeNumber = Number(activePick.usedValue);
-      const remainingNumbers = Array.isArray(selection.remainingNumbers) ? selection.remainingNumbers : [];
-      if (remainingNumbers.length === 0) {
-        return { ok: false, reason: "missing_number", state };
       }
 
       const row = workshop.cells?.[rowIndex];
@@ -829,6 +827,60 @@
       }
       if (cell.circled) {
         return { ok: false, reason: "already_circled", state };
+      }
+
+      if (isEurekaWorkshop) {
+        workshop.cells[rowIndex][columnIndex] = { ...cell, circled: true };
+        workshop.partsByNumber = this.countWorkshopPartsByNumber(workshop.cells);
+        workshop.lastWorkedAtTurn = state.turnNumber;
+        workshop.lastWorkedAtDay = state.currentDay;
+
+        const selections = { ...(state.workshopSelections || {}) };
+        const existing = selection || {};
+        selections[playerId] = {
+          ...existing,
+          selectedWorkshopId: null,
+          workshopLocked: false,
+          remainingNumbers: [],
+          activeNumber: null,
+          activePick: null,
+          placementsThisTurn: Number(existing.placementsThisTurn || 0) + 1,
+          wrenchPickPending: false,
+        };
+        const updatedPlayers = state.players.map((item) => (item.id === playerId ? player : item));
+        const updated = this.gameStateService.update({
+          players: updatedPlayers,
+          workshopSelections: selections,
+        });
+        this.loggerService.logEvent(
+          "info",
+          "Player X added part in " +
+            String(workshop.id) +
+            " at R" +
+            String(rowIndex + 1) +
+            "C" +
+            String(columnIndex + 1) +
+            " (eureka)",
+          {
+            playerId,
+            workshopId,
+            rowIndex,
+            columnIndex,
+            outcomeType: "eureka",
+          },
+        );
+        return { ok: true, reason: null, state: updated };
+      }
+
+      const activePick = selection?.activePick || {
+        usedValue: Number(selection?.activeNumber),
+        consumeValue: Number(selection?.activeNumber),
+        adjusted: false,
+      };
+      const activeNumber = Number(activePick.usedValue);
+      const remainingNumbers = Array.isArray(selection?.remainingNumbers) ? selection.remainingNumbers : [];
+      if (remainingNumbers.length === 0) {
+        return { ok: false, reason: "missing_number", state };
       }
       const valueUsed = cell.kind === "number"
         ? Number(cell.value)
