@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-2" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
@@ -12,6 +13,21 @@
         <h1>Unvention: International Exhibition</h1>
         <label for="new-game-seed">Seed (optional)</label>
         <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
+        <div class="mp-setup">
+          <h2>Online Multiplayer (MVP)</h2>
+          <label for="mp-url">Server URL</label>
+          <input id="mp-url" type="text" placeholder="ws://localhost:8080" />
+          <label for="mp-name">Guest Name</label>
+          <input id="mp-name" type="text" placeholder="Guest" />
+          <label for="mp-room-code">Room Code (join)</label>
+          <input id="mp-room-code" type="text" placeholder="ABC123" />
+          <div class="mp-setup__buttons">
+            <button id="mp-connect" type="button">Connect</button>
+            <button id="mp-create-room" type="button">Create Room</button>
+            <button id="mp-join-room" type="button">Join Room</button>
+          </div>
+          <p id="mp-connection-status" class="mp-status-line">Offline</p>
+        </div>
         <button id="start-new-game" type="button">New Game</button>
       </div>
     </section>
@@ -65,6 +81,16 @@
         <section id="player-state-panel" class="player-state-panel" aria-label="Player status">
           <h3>Summary</h3>
           <div id="player-state-summary" class="player-state-summary"></div>
+          <div id="mp-room-panel" class="mp-room-panel">
+            <p id="mp-room-status" class="mp-status-line">No room joined.</p>
+            <p id="mp-turn-roll" class="mp-status-line">Turn: - | Roll: -</p>
+            <div class="mp-room-panel__buttons">
+              <button id="mp-start-game" type="button">Start Room Game</button>
+              <button id="mp-sync" type="button">Sync</button>
+              <button id="mp-leave-room" type="button">Leave Room</button>
+            </div>
+            <ul id="mp-player-list" class="mp-player-list"></ul>
+          </div>
           <button id="reset-game" type="button">Reset Game</button>
         </section>
         <div class="log-header">
@@ -86,12 +112,13 @@
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
+    <script src="src/adapters/web/multiplayerClient.js?v=20260214-2"></script>
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js"></script>
     <script src="src/app/container.js"></script>
-    <script src="src/app/bootstrap.js"></script>
+    <script src="src/app/bootstrap.js?v=20260214-2"></script>
   </body>
 </html>

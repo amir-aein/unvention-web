@@ -1,0 +1,97 @@
+# Multiplayer Server (MVP)
+
+## Run
+
+1. Install dependencies:
+   `npm install`
+2. Start server:
+   `npm run server`
+3. Optional custom port:
+   `PORT=8090 npm run server`
+4. Smoke test (in another terminal):
+   `npm run server:smoke`
+
+Server health check:
+`GET http://localhost:8080/`
+
+## Protocol
+
+All messages are JSON with a `type` field.
+
+### Client -> Server
+
+- `create_room`
+  - payload: `{ "type": "create_room", "name": "Host Name" }`
+- `join_room`
+  - payload: `{ "type": "join_room", "roomCode": "ABC123", "name": "Guest Name" }`
+  - reconnect payload: `{ "type": "join_room", "roomCode": "ABC123", "reconnectToken": "..." }`
+- `start_game`
+  - payload: `{ "type": "start_game" }`
+  - host only
+- `player_state_update`
+  - payload: `{ "type": "player_state_update", "state": { ... } }`
+  - used for per-player local board persistence/recovery (server does basic shape handling only)
+- `end_turn`
+  - payload: `{ "type": "end_turn", "turnSummary": { "completedJournals": 1, "totalScore": 10, "payload": { "day": "Friday", "turnNumber": 1 }, "actions": [ ...deltaEvents ] } }`
+- `kick_player`
+  - payload: `{ "type": "kick_player", "playerId": "P3" }`
+  - host only
+- `terminate_room`
+  - payload: `{ "type": "terminate_room" }`
+  - host only; closes room for all players
+- `leave_room`
+  - payload: `{ "type": "leave_room" }`
+- `request_sync`
+  - payload: `{ "type": "request_sync" }`
+- `heartbeat`
+  - payload: `{ "type": "heartbeat" }`
+
+### Server -> Client
+
+- `connected` with `connectionId`
+- `room_joined` with `roomCode`, `playerId`, `reconnectToken`
+- `room_state` with full room snapshot and your player identity
+- `player_state_update` broadcast when any player publishes state
+- `turn_advanced` when all players have ended turn
+- `game_completed` on Sunday completion
+- `removed_from_room` when kicked/removed
+- `room_terminated` when host cancels room
+- `error` with `code`, `message`
+
+## Gameplay Rules Enforced
+
+- Max 5 players in a room.
+- Private room code model.
+- 15-minute reconnect window.
+- One shared dice roll each turn for the whole room.
+- Turn barrier: next turn only starts when all players send `end_turn`.
+- Basic turn validity checks: `end_turn` is rejected when `day/turnNumber` do not match current room turn.
+- Duplicate end-turn rejection for same player/turn.
+- Host controls: start game and kick players.
+
+## Logging
+
+Server action logs are written to:
+`server/output/actions.ndjson`
+
+Each line is one JSON event with timestamp, room code, type, and payload.
+
+## One-Computer Testing
+
+1. Start server: `npm run server`
+2. Open game in multiple browser contexts:
+   - normal window
+   - incognito window
+   - second browser (optional)
+3. Create room in one context, join from others with room code.
+4. Start game as host, then validate:
+   - all clients receive same roll
+   - independent actions can proceed
+   - next turn does not start until everyone ends turn
+   - disconnect/reconnect works within 15 minutes
+
+## Authority Model
+
+- Server is authoritative for room lifecycle and turn lifecycle (`start_game`, shared roll, `end_turn`, turn advance).
+- Client owns per-turn action execution locally.
+- Client submits per-turn delta action list at `end_turn` for audit/debug.

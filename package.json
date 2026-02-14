@@ -5,7 +5,12 @@
   "scripts": {
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "simulate": "node sim/runner.js"
+    "simulate": "node sim/runner.js",
+    "server": "node server/index.js",
+    "server:smoke": "node server/smoke.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.1"
   },
   "keywords": [],
   "author": "",

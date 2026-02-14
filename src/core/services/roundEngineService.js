@@ -127,8 +127,7 @@
       ],
     },
   ];
-  const IS_BROWSER_RUNTIME = typeof window !== "undefined";
-  const FORCE_BUILD_CHEAT_FOR_TESTING = IS_BROWSER_RUNTIME;
+  const FORCE_BUILD_CHEAT_FOR_TESTING = false;
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],

@@ -56,6 +56,56 @@ body {
   color: var(--muted);
 }
 
+.mp-setup {
+  margin-top: 0.35rem;
+  padding: 0.65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mp-setup h2 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.mp-setup__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mp-room-panel {
+  margin-top: 0.55rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mp-room-panel__buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.mp-player-list {
+  margin: 0;
+  padding-left: 1rem;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.mp-status-line {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #475569;
+}
+
 .app {
   max-width: 1200px;
   margin: 0 auto;
