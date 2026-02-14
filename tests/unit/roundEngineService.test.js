@@ -72,7 +72,7 @@ test('RoundEngineService advances through standard phase order', () => {
 
   harness.engine.advancePhase();
   const afterTurn = harness.getState();
-  assert.equal(afterTurn.phase, 'journal');
+  assert.equal(afterTurn.phase, 'roll_and_group');
   assert.equal(afterTurn.turnNumber, 2);
   assert.equal(afterTurn.currentDay, 'Friday');
 });
@@ -90,7 +90,7 @@ test('RoundEngineService skips build when player has fewer than two wrenches', (
 
   harness.engine.advancePhase();
   const state = harness.getState();
-  assert.equal(state.phase, 'journal');
+  assert.equal(state.phase, 'roll_and_group');
   assert.equal(state.turnNumber, 2);
 });
 
@@ -105,7 +105,7 @@ test('RoundEngineService skips invent when no mechanism built this turn', () => 
 
   harness.engine.advancePhase();
   const after = harness.getState();
-  assert.equal(after.phase, 'journal');
+  assert.equal(after.phase, 'roll_and_group');
   assert.equal(after.turnNumber, 2);
 });
 
@@ -120,7 +120,7 @@ test('RoundEngineService ends Friday and starts Saturday when threshold reached'
 
   assert.equal(state.currentDay, 'Saturday');
   assert.equal(state.turnNumber, 2);
-  assert.equal(state.phase, 'journal');
+  assert.equal(state.phase, 'roll_and_group');
   assert.equal(state.gameStatus, 'active');
 });
 
@@ -219,6 +219,13 @@ test('RoundEngineService initializes players with default journals', () => {
   assert.deepEqual(p1.journals[0].columnWrenches, ['available', 'available', 'available', 'available']);
   assert.equal(p1.journals[0].ideaStatus, 'available');
   assert.equal(p1.journals[0].completionStatus, 'incomplete');
+  assert.equal(p1.inventions.length, 3);
+  assert.equal(p1.inventions[0].id, 'I1');
+  assert.equal(p1.inventions[0].name, 'The Integron Assembly');
+  assert.equal(p1.inventions[0].criterionLabel, 'Intricacy');
+  assert.equal(p1.inventions[0].completionStatus, 'incomplete');
+  assert.equal(p1.inventions[0].uniqueIdeasMarked, 1);
+  assert.equal(p1.inventions[0].multiplier, 1);
 });
 
 test('RoundEngineService requires journaling selection and placement before phase ends', () => {
@@ -535,4 +542,59 @@ test('RoundEngineService keeps workshop idea locked when mechanism misses one su
     .workshops.find((item) => item.id === 'W1');
   const stillLocked = updatedWorkshop.ideas.find((idea) => idea.row === 0 && idea.col === 1);
   assert.equal(stillLocked.status, 'locked');
+});
+
+test('RoundEngineService places pending mechanism into invention and marks workshop + ideas', () => {
+  const harness = createHarness({ phase: 'invent' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.mechanisms.push({
+    id: 'M1',
+    workshopId: 'W2',
+    path: [{ row: 0, col: 0 }, { row: 0, col: 1 }],
+    edges: ['r0c0-r0c1'],
+    ideaCount: 2,
+    usedInventionId: null,
+    inventionPlacement: null,
+    builtAtTurn: state.turnNumber,
+    builtAtDay: state.currentDay,
+  });
+  harness.engine.gameStateService.update({ players: state.players });
+
+  const placed = harness.engine.placeMechanismInInvention('P1', 'I1', 2, 0);
+  assert.equal(placed.ok, true);
+  const after = harness.getState();
+  const invention = after.players.find((player) => player.id === 'P1').inventions.find((item) => item.id === 'I1');
+  const mechanism = after.players.find((player) => player.id === 'P1').mechanisms.find((item) => item.id === 'M1');
+  assert.equal(mechanism.usedInventionId, 'I1');
+  assert.equal(invention.workshopTypeMarks.W2, true);
+  assert.equal(invention.uniqueIdeasMarked, 3);
+  assert.equal(invention.multiplier, 3);
+  assert.equal(invention.placements.length, 1);
+});
+
+test('RoundEngineService rejects invention placement when mechanism does not fit the pattern', () => {
+  const harness = createHarness({ phase: 'invent' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.mechanisms.push({
+    id: 'M1',
+    workshopId: 'W1',
+    path: [{ row: 0, col: 0 }, { row: 1, col: 0 }, { row: 2, col: 0 }],
+    edges: ['r0c0-r1c0', 'r1c0-r2c0'],
+    ideaCount: 0,
+    usedInventionId: null,
+    inventionPlacement: null,
+    builtAtTurn: state.turnNumber,
+    builtAtDay: state.currentDay,
+  });
+  harness.engine.gameStateService.update({ players: state.players });
+
+  const preview = harness.engine.computeInventionPlacementPreview('P1', 'I1', 0, 0);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.reason, 'out_of_pattern');
+  const placed = harness.engine.placeMechanismInInvention('P1', 'I1', 0, 0);
+  assert.equal(placed.ok, false);
 });

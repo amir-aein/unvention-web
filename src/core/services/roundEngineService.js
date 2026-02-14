@@ -2,6 +2,7 @@
   const root = globalScope.Unvention || (globalScope.Unvention = {});
 
   const PHASES = [
+    "roll_and_group",
     "journal",
     "workshop",
     "build",
@@ -18,7 +19,59 @@
   const JOURNAL_SIZE = 4;
   const WORKSHOP_COUNT = 4;
   const WORKSHOP_SIZE = 5;
+  const INVENTION_TEMPLATES = [
+    {
+      id: "I1",
+      name: "The Integron Assembly",
+      criterionKey: "intricacy",
+      criterionLabel: "Intricacy",
+      pattern: [
+        "0001000",
+        "0011100",
+        "1111111",
+        "1111111",
+      ],
+    },
+    {
+      id: "I2",
+      name: "The Unison Motorworks",
+      criterionKey: "synchrony",
+      criterionLabel: "Synchrony",
+      pattern: [
+        "00110011",
+        "11111111",
+        "11111111",
+        "11001100",
+      ],
+    },
+    {
+      id: "I3",
+      name: "The Lateral Arc Engine",
+      criterionKey: "modularity",
+      criterionLabel: "Modularity",
+      pattern: [
+        "01000010",
+        "11100111",
+        "11111111",
+        "11111111",
+        "11100111",
+        "01000010",
+      ],
+    },
+  ];
+  const INVENTION_COUNT = INVENTION_TEMPLATES.length;
   const BUILD_WRENCH_COST = 2;
+  const VARIETY_BONUS_BY_TYPE_COUNT = {
+    1: 0,
+    2: 3,
+    3: 7,
+    4: 12,
+  };
+  const COMPLETION_BONUS_BY_INVENTION_AND_DAY = {
+    I1: { Friday: 10, Saturday: 8, Sunday: 5 },
+    I2: { Friday: 13, Saturday: 11, Sunday: 8 },
+    I3: { Friday: 18, Saturday: 16, Sunday: 12 },
+  };
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],
@@ -99,6 +152,16 @@
 
     getPhases() {
       return [...PHASES];
+    }
+
+    getDefaultInventionCatalog() {
+      return INVENTION_TEMPLATES.map((template) => ({
+        id: template.id,
+        name: template.name,
+        criterionKey: template.criterionKey,
+        criterionLabel: template.criterionLabel,
+        pattern: template.pattern.map((row) => String(row)),
+      }));
     }
 
     getJournalingOptions(playerId) {
@@ -524,20 +587,23 @@
         return { ok: false, reason: "insufficient_wrenches", state };
       }
 
+      const workshop = player.workshops.find((item) => item.id === draft.workshopId);
+      const unlockedIdeas = workshop
+        ? this.updateUnlockedWorkshopIdeas(workshop, draft.path, state)
+        : [];
       const mechanisms = Array.isArray(player.mechanisms) ? [...player.mechanisms] : [];
       mechanisms.push({
         id: "M" + String(mechanisms.length + 1),
         workshopId: draft.workshopId,
         path: draft.path.map((item) => ({ row: item.row, col: item.col })),
         edges: this.selectionToEdgeIds(draft.path),
+        ideaCount: unlockedIdeas.length,
+        usedInventionId: null,
+        inventionPlacement: null,
         builtAtTurn: state.turnNumber,
         builtAtDay: state.currentDay,
       });
       player.mechanisms = mechanisms;
-      const workshop = player.workshops.find((item) => item.id === draft.workshopId);
-      const unlockedIdeas = workshop
-        ? this.updateUnlockedWorkshopIdeas(workshop, draft.path, state)
-        : [];
       player.spentWrenches = Number(player.spentWrenches || 0) + cost;
       player.lastBuildAtTurn = state.turnNumber;
       player.lastBuildAtDay = state.currentDay;
@@ -606,6 +672,312 @@
         { row: row + 1, col },
         { row: row + 1, col: col + 1 },
       ];
+    }
+
+    getPendingMechanismForInvent(playerId) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player || !Array.isArray(player.mechanisms)) {
+        return null;
+      }
+      const pending = [...player.mechanisms]
+        .filter(
+          (item) =>
+            item.builtAtTurn === state.turnNumber &&
+            item.builtAtDay === state.currentDay &&
+            !item.usedInventionId,
+        )
+        .sort((a, b) => String(b.id).localeCompare(String(a.id)))[0];
+      return pending || null;
+    }
+
+    getMechanismNormalizedShape(path) {
+      const points = Array.isArray(path) ? path : [];
+      if (points.length === 0) {
+        return [];
+      }
+      const minRow = Math.min(...points.map((point) => Number(point.row)));
+      const minCol = Math.min(...points.map((point) => Number(point.col)));
+      return points.map((point) => ({
+        row: Number(point.row) - minRow,
+        col: Number(point.col) - minCol,
+      }));
+    }
+
+    isInventionPatternOpen(invention, row, col) {
+      const rows = Array.isArray(invention?.pattern) ? invention.pattern.map((item) => String(item)) : [];
+      if (row < 0 || col < 0 || row >= rows.length) {
+        return false;
+      }
+      const rowText = rows[row] || "";
+      if (col >= rowText.length) {
+        return false;
+      }
+      return rowText[col] === "1";
+    }
+
+    computeInventionPlacementPreview(playerId, inventionId, anchorRow, anchorCol) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", cells: [] };
+      }
+      const invention = (player.inventions || []).find((item) => item.id === inventionId);
+      if (!invention) {
+        return { ok: false, reason: "invalid_invention", cells: [] };
+      }
+      const mechanism = this.getPendingMechanismForInvent(playerId);
+      if (!mechanism) {
+        return { ok: false, reason: "missing_mechanism", cells: [] };
+      }
+      const normalized = this.getMechanismNormalizedShape(mechanism.path);
+      if (normalized.length === 0) {
+        return { ok: false, reason: "invalid_mechanism", cells: [] };
+      }
+      const baseRow = Number(anchorRow);
+      const baseCol = Number(anchorCol);
+      const placementCells = normalized.map((point) => ({
+        row: baseRow + Number(point.row),
+        col: baseCol + Number(point.col),
+      }));
+      const occupied = new Set(
+        (Array.isArray(invention.placements) ? invention.placements : [])
+          .flatMap((item) => (Array.isArray(item.cells) ? item.cells : []))
+          .map((cell) => String(cell.row) + ":" + String(cell.col)),
+      );
+      const allOpen = placementCells.every((cell) => this.isInventionPatternOpen(invention, cell.row, cell.col));
+      const noOverlap = placementCells.every((cell) => !occupied.has(String(cell.row) + ":" + String(cell.col)));
+      return {
+        ok: allOpen && noOverlap,
+        reason: allOpen ? (noOverlap ? null : "overlap") : "out_of_pattern",
+        cells: placementCells,
+        inventionId: invention.id,
+        mechanismId: mechanism.id,
+        workshopId: mechanism.workshopId,
+        ideaCount: Number(mechanism.ideaCount || 0),
+      };
+    }
+
+    placeMechanismInInvention(playerId, inventionId, anchorRow, anchorCol) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "invent") {
+        return { ok: false, reason: "invalid_phase", state };
+      }
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      const preview = this.computeInventionPlacementPreview(playerId, inventionId, anchorRow, anchorCol);
+      if (!preview.ok) {
+        return { ok: false, reason: preview.reason || "invalid_placement", state };
+      }
+      const inventions = Array.isArray(player.inventions) ? player.inventions : [];
+      const inventionIndex = inventions.findIndex((item) => item.id === inventionId);
+      if (inventionIndex < 0) {
+        return { ok: false, reason: "invalid_invention", state };
+      }
+      const invention = inventions[inventionIndex];
+      const mechanismIndex = (Array.isArray(player.mechanisms) ? player.mechanisms : []).findIndex(
+        (item) => item.id === preview.mechanismId,
+      );
+      if (mechanismIndex < 0) {
+        return { ok: false, reason: "missing_mechanism", state };
+      }
+      const mechanism = player.mechanisms[mechanismIndex];
+      mechanism.usedInventionId = invention.id;
+      mechanism.inventionPlacement = {
+        anchorRow: Number(anchorRow),
+        anchorCol: Number(anchorCol),
+        cells: preview.cells.map((cell) => ({ row: cell.row, col: cell.col })),
+      };
+
+      const placements = Array.isArray(invention.placements) ? [...invention.placements] : [];
+      placements.push({
+        mechanismId: mechanism.id,
+        workshopId: mechanism.workshopId,
+        cells: preview.cells.map((cell) => ({ row: cell.row, col: cell.col })),
+      });
+      invention.placements = placements;
+      invention.usedMechanismIds = Array.isArray(invention.usedMechanismIds)
+        ? [...new Set([...invention.usedMechanismIds, mechanism.id])]
+        : [mechanism.id];
+      invention.workshopTypeMarks = {
+        ...(invention.workshopTypeMarks || {}),
+        [mechanism.workshopId]: true,
+      };
+      const nextIdeas = Math.min(6, Math.max(1, Number(invention.uniqueIdeasMarked || 1) + Number(preview.ideaCount || 0)));
+      invention.uniqueIdeasMarked = nextIdeas;
+      invention.multiplier = nextIdeas;
+      this.recalculateInventionScoring(player, invention, state.currentDay);
+
+      const players = state.players.map((item) => (item.id === player.id ? player : item));
+      const updated = this.gameStateService.update({ players });
+      this.loggerService.logEvent(
+        "info",
+        "Player X placed mechanism " + String(mechanism.id) + " into " + String(invention.name),
+        {
+          playerId,
+          inventionId: invention.id,
+          mechanismId: mechanism.id,
+          workshopId: mechanism.workshopId,
+          ideaMarksAdded: Number(preview.ideaCount || 0),
+        },
+      );
+      return { ok: true, reason: null, state: updated };
+    }
+
+    getPendingJournalIdeaJournals(playerId) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return [];
+      }
+      return (Array.isArray(player.journals) ? player.journals : []).filter(
+        (journal) => journal.ideaStatus === "completed" && !journal.ideaAssignedToInventionId,
+      );
+    }
+
+    assignJournalIdeaToInvention(playerId, journalId, inventionId) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      const journal = (player.journals || []).find((item) => item.id === journalId);
+      if (!journal) {
+        return { ok: false, reason: "invalid_journal", state };
+      }
+      if (journal.ideaStatus !== "completed" || journal.ideaAssignedToInventionId) {
+        return { ok: false, reason: "idea_not_assignable", state };
+      }
+      const invention = (player.inventions || []).find((item) => item.id === inventionId);
+      if (!invention) {
+        return { ok: false, reason: "invalid_invention", state };
+      }
+      journal.ideaAssignedToInventionId = invention.id;
+      const nextIdeas = Math.min(6, Math.max(1, Number(invention.uniqueIdeasMarked || 1) + 1));
+      invention.uniqueIdeasMarked = nextIdeas;
+      invention.multiplier = nextIdeas;
+      this.recalculateInventionScoring(player, invention, state.currentDay);
+      const players = state.players.map((item) => (item.id === player.id ? player : item));
+      const updated = this.gameStateService.update({ players });
+      this.loggerService.logEvent(
+        "info",
+        "Player X assigned journal idea " + String(journal.id) + " to " + String(invention.name),
+        {
+          playerId,
+          journalId,
+          inventionId,
+        },
+      );
+      return { ok: true, reason: null, state: updated };
+    }
+
+    recalculateInventionScoring(player, invention, currentDay) {
+      const mechanismsById = new Map(
+        (Array.isArray(player.mechanisms) ? player.mechanisms : []).map((item) => [item.id, item]),
+      );
+      const placements = Array.isArray(invention.placements) ? invention.placements : [];
+      const usedMechanisms = placements
+        .map((placement) => mechanismsById.get(placement.mechanismId))
+        .filter(Boolean);
+      const uniqueMultiplier = Math.min(6, Math.max(1, Number(invention.uniqueIdeasMarked || invention.multiplier || 1)));
+      invention.uniqueIdeasMarked = uniqueMultiplier;
+      invention.multiplier = uniqueMultiplier;
+
+      const usedWorkshopTypes = Object.entries(invention.workshopTypeMarks || {})
+        .filter(([_workshopId, marked]) => Boolean(marked))
+        .map(([workshopId]) => workshopId);
+      const typeCount = usedWorkshopTypes.length;
+      const variety = typeCount > 0
+        ? Number(VARIETY_BONUS_BY_TYPE_COUNT[Math.min(4, typeCount)] || 0)
+        : 0;
+
+      const openCellCount = (Array.isArray(invention.pattern) ? invention.pattern : [])
+        .map((row) => String(row))
+        .reduce(
+          (count, row) =>
+            count +
+            row
+              .split("")
+              .filter((cell) => cell === "1").length,
+          0,
+        );
+      const filledCellCount = placements.reduce(
+        (count, placement) => count + (Array.isArray(placement.cells) ? placement.cells.length : 0),
+        0,
+      );
+      const isComplete = openCellCount > 0 && filledCellCount >= openCellCount;
+      invention.completionStatus = isComplete ? "complete" : "incomplete";
+      const completion = isComplete
+        ? Number(COMPLETION_BONUS_BY_INVENTION_AND_DAY[invention.id]?.[currentDay] || 0)
+        : 0;
+
+      let unique = 0;
+      if (invention.criterionKey === "intricacy") {
+        unique = usedMechanisms.length * uniqueMultiplier;
+      } else if (invention.criterionKey === "synchrony") {
+        const frequencyByShape = new Map();
+        usedMechanisms.forEach((mechanism) => {
+          const signature = this.getMechanismShapeSignature(mechanism.path, true);
+          frequencyByShape.set(signature, Number(frequencyByShape.get(signature) || 0) + 1);
+        });
+        const mostRepeated = Math.max(0, ...Array.from(frequencyByShape.values()));
+        unique = mostRepeated * uniqueMultiplier;
+      } else if (invention.criterionKey === "modularity") {
+        const uniqueSizes = new Set(
+          usedMechanisms.map((mechanism) =>
+            Array.isArray(mechanism.path) ? mechanism.path.length : 0,
+          ),
+        );
+        unique = uniqueSizes.size * uniqueMultiplier;
+      }
+
+      invention.scoring = {
+        variety,
+        completion,
+        unique,
+        total: variety + completion + unique,
+      };
+      invention.score = invention.scoring.total;
+    }
+
+    getMechanismShapeSignature(path, includeRotationsAndMirrors) {
+      const normalized = this.getMechanismNormalizedShape(path);
+      if (normalized.length === 0) {
+        return "";
+      }
+      const toSignature = (points) =>
+        points
+          .slice()
+          .sort((a, b) => (a.row === b.row ? a.col - b.col : a.row - b.row))
+          .map((point) => String(point.row) + ":" + String(point.col))
+          .join("|");
+      const normalizePoints = (points) => {
+        const minRow = Math.min(...points.map((point) => point.row));
+        const minCol = Math.min(...points.map((point) => point.col));
+        return points.map((point) => ({ row: point.row - minRow, col: point.col - minCol }));
+      };
+      if (!includeRotationsAndMirrors) {
+        return toSignature(normalized);
+      }
+      const variants = [];
+      const base = normalized.map((point) => ({ row: point.row, col: point.col }));
+      const transforms = [
+        (p) => ({ row: p.row, col: p.col }),
+        (p) => ({ row: p.col, col: -p.row }),
+        (p) => ({ row: -p.row, col: -p.col }),
+        (p) => ({ row: -p.col, col: p.row }),
+        (p) => ({ row: p.row, col: -p.col }),
+        (p) => ({ row: -p.row, col: p.col }),
+        (p) => ({ row: p.col, col: p.row }),
+        (p) => ({ row: -p.col, col: -p.row }),
+      ];
+      transforms.forEach((transform) => {
+        const points = normalizePoints(base.map((point) => transform(point)));
+        variants.push(toSignature(points));
+      });
+      return variants.sort()[0];
     }
 
     placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
@@ -787,7 +1159,9 @@
         id: playerId,
         completedJournals: 0,
         spentWrenches: 0,
+        totalScore: 0,
         mechanisms: [],
+        inventions: this.getDefaultInventionCatalog().map((item) => this.createDefaultInvention(item.id)),
         lastBuildAtTurn: null,
         lastBuildAtDay: null,
         journals: Array.from({ length: JOURNAL_COUNT }, (_item, index) =>
@@ -810,6 +1184,171 @@
         ideaStatus: "available",
         completionStatus: "incomplete",
       };
+    }
+
+    createDefaultInvention(inventionRef) {
+      const template = this.resolveInventionTemplate(inventionRef);
+      return {
+        id: template.id,
+        name: template.name,
+        criterionKey: template.criterionKey,
+        criterionLabel: template.criterionLabel,
+        pattern: template.pattern.map((row) => String(row)),
+        usedMechanismIds: [],
+        placements: [],
+        workshopTypeMarks: {
+          W1: false,
+          W2: false,
+          W3: false,
+          W4: false,
+        },
+        scoring: {
+          variety: 0,
+          completion: 0,
+          unique: 0,
+          total: 0,
+        },
+        ideasCaptured: 0,
+        uniqueIdeasMarked: 1,
+        multiplier: 1,
+        score: 0,
+        presentedDay: null,
+        completionStatus: "incomplete",
+      };
+    }
+
+    resolveInventionTemplate(inventionRef) {
+      const catalog = this.getDefaultInventionCatalog();
+      if (typeof inventionRef === "string") {
+        const byId = catalog.find((item) => item.id === inventionRef);
+        if (byId) {
+          return byId;
+        }
+      }
+      if (Number.isInteger(inventionRef)) {
+        const index = Math.max(0, Number(inventionRef) - 1);
+        const byIndex = catalog[index];
+        if (byIndex) {
+          return byIndex;
+        }
+      }
+      return catalog[0];
+    }
+
+    ensurePlayerInventions() {
+      const state = this.gameStateService.getState();
+      const players = Array.isArray(state.players) ? state.players : [];
+      if (players.length === 0) {
+        return state;
+      }
+      const catalog = this.getDefaultInventionCatalog();
+      let changed = false;
+      const normalizedPlayers = players.map((player) => {
+        const existing = Array.isArray(player.inventions) ? player.inventions : [];
+        const byId = new Map(existing.map((item) => [item.id, item]));
+        const normalizedInventions = catalog.map((template, index) => {
+          const prior = byId.get(template.id) || existing[index] || {};
+          const workshopMarks = prior.workshopTypeMarks || {};
+          const priorScoring = prior.scoring || {};
+          return {
+            id: template.id,
+            name: template.name,
+            criterionKey: template.criterionKey,
+            criterionLabel: template.criterionLabel,
+            pattern: template.pattern.map((row) => String(row)),
+            usedMechanismIds: Array.isArray(prior.usedMechanismIds) ? [...prior.usedMechanismIds] : [],
+            placements: Array.isArray(prior.placements)
+              ? prior.placements.map((placement) => ({
+                  mechanismId: placement?.mechanismId || "",
+                  workshopId: placement?.workshopId || "",
+                  cells: Array.isArray(placement?.cells)
+                    ? placement.cells.map((cell) => ({
+                        row: Number(cell?.row),
+                        col: Number(cell?.col),
+                      }))
+                    : [],
+                }))
+              : [],
+            workshopTypeMarks: {
+              W1: Boolean(workshopMarks.W1),
+              W2: Boolean(workshopMarks.W2),
+              W3: Boolean(workshopMarks.W3),
+              W4: Boolean(workshopMarks.W4),
+            },
+            scoring: {
+              variety: Number(priorScoring.variety || 0),
+              completion: Number(priorScoring.completion || 0),
+              unique: Number(priorScoring.unique || 0),
+              total: Number(priorScoring.total || 0),
+            },
+            ideasCaptured: Number(prior.ideasCaptured || 0),
+            uniqueIdeasMarked: Math.min(
+              6,
+              Math.max(1, Number(prior.uniqueIdeasMarked || prior.multiplier || 1)),
+            ),
+            multiplier: Math.min(
+              6,
+              Math.max(1, Number(prior.multiplier || prior.uniqueIdeasMarked || 1)),
+            ),
+            score: Number(prior.score || 0),
+            presentedDay: typeof prior.presentedDay === "string" ? prior.presentedDay : null,
+            completionStatus: prior.completionStatus === "complete" ? "complete" : "incomplete",
+          };
+        });
+        const priorKeys = existing.map((item) => item && item.id).join("|");
+        const nextKeys = normalizedInventions.map((item) => item.id).join("|");
+        if (existing.length !== normalizedInventions.length || priorKeys !== nextKeys) {
+          changed = true;
+        }
+        if (!Array.isArray(player.inventions)) {
+          changed = true;
+        }
+        if (!Number.isFinite(Number(player.totalScore))) {
+          changed = true;
+        }
+        if (!changed) {
+          const schemaMismatch = normalizedInventions.some((item, index) => {
+            const previous = existing[index] || {};
+            if (previous.name !== item.name) {
+              return true;
+            }
+            if (previous.criterionLabel !== item.criterionLabel) {
+              return true;
+            }
+            if (!Array.isArray(previous.pattern) || previous.pattern.length === 0) {
+              return true;
+            }
+            if (previous.pattern.map((row) => String(row)).join("|") !== item.pattern.join("|")) {
+              return true;
+            }
+            if (!previous.scoring || typeof previous.scoring !== "object") {
+              return true;
+            }
+            if (!Array.isArray(previous.placements)) {
+              return true;
+            }
+            if (!Number.isInteger(previous.uniqueIdeasMarked) || previous.uniqueIdeasMarked < 1) {
+              return true;
+            }
+            if (typeof previous.presentedDay !== "string" && previous.presentedDay !== null) {
+              return true;
+            }
+            return false;
+          });
+          if (schemaMismatch) {
+            changed = true;
+          }
+        }
+        return {
+          ...player,
+          totalScore: Number(player.totalScore || 0),
+          inventions: normalizedInventions,
+        };
+      });
+      if (!changed) {
+        return state;
+      }
+      return this.gameStateService.update({ players: normalizedPlayers });
     }
 
     createDefaultWorkshop(workshopNumber) {
@@ -965,6 +1504,18 @@
       }
 
       if (phaseIndex < PHASES.length - 1) {
+        if (state.phase === "roll_and_group") {
+          this.rollForJournalPhase(state);
+          const updated = this.gameStateService.update({ phase: "journal" });
+          this.loggerService.logEvent("info", "Phase advanced", {
+            day: updated.currentDay,
+            turnNumber: updated.turnNumber,
+            from: state.phase,
+            to: "journal",
+          });
+          return updated;
+        }
+
         if (state.phase === "journal") {
           const preparedState = this.ensureJournalRoll(state);
           return this.completeJournalPhase(preparedState);
@@ -1040,6 +1591,14 @@
       if ((selection.placementsThisTurn || 0) < 1) {
         this.loggerService.logEvent("warn", "Place at least one number before ending Journal phase", {
           playerId,
+        });
+        return stateAtJournalPhase;
+      }
+      const pendingIdeas = this.getPendingJournalIdeaJournals(playerId);
+      if (pendingIdeas.length > 0) {
+        this.loggerService.logEvent("warn", "Assign completed journal idea before ending Journal phase", {
+          playerId,
+          pendingJournalIds: pendingIdeas.map((item) => item.id),
         });
         return stateAtJournalPhase;
       }
@@ -1196,12 +1755,16 @@
 
     completeTurn(stateAtEndPhase) {
       const dayResolution = this.resolveDayTransition(stateAtEndPhase);
+      const stateWithScoring = dayResolution.endedDay
+        ? this.applyEndOfDayScoring(stateAtEndPhase, dayResolution.endedDay)
+        : stateAtEndPhase;
 
       if (dayResolution.gameCompleted) {
         const completed = this.gameStateService.update({
           gameStatus: "completed",
           phase: PHASES[PHASES.length - 1],
           currentDay: dayResolution.finalDay,
+          players: stateWithScoring.players,
         });
 
         this.loggerService.logEvent("info", "Day ended", {
@@ -1227,12 +1790,14 @@
           currentDay: dayResolution.nextDay,
           turnNumber: stateAtEndPhase.turnNumber + 1,
           phase: PHASES[0],
+          players: stateWithScoring.players,
           journalSelections: {},
           workshopSelections: {},
           workshopPhaseContext: {},
           buildDrafts: {},
+          buildDecisions: {},
         });
-        const prepared = this.ensureJournalRoll(progressed);
+        const prepared = progressed;
 
         this.loggerService.logEvent("info", "Day ended", {
           day: dayResolution.endedDay,
@@ -1260,14 +1825,44 @@
         workshopSelections: {},
         workshopPhaseContext: {},
         buildDrafts: {},
+        buildDecisions: {},
       });
-      const prepared = this.ensureJournalRoll(nextTurn);
+      const prepared = nextTurn;
 
       this.loggerService.logEvent("info", "Turn completed", {
         day: prepared.currentDay,
         turnNumber: stateAtEndPhase.turnNumber,
       });
       return prepared;
+    }
+
+    applyEndOfDayScoring(state, dayLabel) {
+      const players = Array.isArray(state.players) ? state.players : [];
+      const scoredPlayers = players.map((player) => {
+        const inventions = Array.isArray(player.inventions) ? [...player.inventions] : [];
+        let gained = 0;
+        inventions.forEach((invention) => {
+          if (invention.presentedDay) {
+            return;
+          }
+          const hasAnyPlacement = Array.isArray(invention.placements) && invention.placements.length > 0;
+          const canPresentToday = invention.completionStatus === "complete" || dayLabel === "Sunday";
+          if (!hasAnyPlacement || !canPresentToday) {
+            return;
+          }
+          gained += Number(invention.scoring?.total || 0);
+          invention.presentedDay = dayLabel;
+        });
+        return {
+          ...player,
+          totalScore: Number(player.totalScore || 0) + gained,
+          inventions,
+        };
+      });
+      return {
+        ...state,
+        players: scoredPlayers,
+      };
     }
 
     resolveDayTransition(state) {

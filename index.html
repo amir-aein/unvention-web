@@ -19,24 +19,58 @@
       <section class="workspace">
         <div class="workspace-head">
           <h1 class="workspace-title">Unvention: International Exhibition</h1>
+          <div id="footer-breadcrumb" class="workspace-breadcrumb"></div>
+          <nav class="workspace-nav" aria-label="Section shortcuts">
+            <a href="#round-roll-panel">Roll</a>
+            <a href="#journals-panel">Journals</a>
+            <a href="#workshops-panel">Workshops</a>
+            <a href="#inventions-panel">Inventions</a>
+            <a href="#tools-panel">Tools</a>
+          </nav>
+          <div class="workspace-actions">
+            <div class="workspace-actions__left">
+              <div id="phase-expectation" class="phase-expectation"></div>
+              <div id="journal-controls" class="journal-controls journal-controls--header"></div>
+            </div>
+            <div class="workspace-actions__right">
+              <button id="advance-phase" type="button">Skip</button>
+              <button id="undo-action" type="button" aria-label="Undo">↺</button>
+            </div>
+          </div>
         </div>
 
-        <section class="journals-panel" aria-label="Player journals">
+        <section id="round-roll-panel" class="round-roll-panel" aria-label="Current round roll">
+          <h2>Current Turn Roll</h2>
+          <div id="round-roll-container" class="round-roll-container"></div>
+        </section>
+        <section id="journals-panel" class="journals-panel" aria-label="Player journals">
           <h2>P1 Journals</h2>
           <div id="journals-container" class="journals-container"></div>
         </section>
-        <section class="workshops-panel" aria-label="Player workshops">
+        <section id="workshops-panel" class="workshops-panel" aria-label="Player workshops">
           <h2>P1 Workshops</h2>
           <div id="workshops-container" class="workshops-container"></div>
+        </section>
+        <section id="inventions-panel" class="inventions-panel" aria-label="Player inventions">
+          <h2>P1 Inventions</h2>
+          <div id="inventions-container" class="inventions-container"></div>
+        </section>
+        <section id="tools-panel" class="tools-panel" aria-label="Player tools">
+          <h2>Tools</h2>
+          <p class="tools-placeholder">Tool interactions coming next.</p>
         </section>
       </section>
 
       <aside class="log-sidebar" aria-label="Action log">
+        <section id="player-state-panel" class="player-state-panel" aria-label="Player status">
+          <h3>Summary</h3>
+          <div id="player-state-summary" class="player-state-summary"></div>
+          <button id="reset-game" type="button">Reset Game</button>
+        </section>
         <div class="log-header">
           <h2>Action Log</h2>
           <div class="log-header-actions">
             <button id="clear-log" type="button">Clear</button>
-            <button id="reset-game" type="button">Reset Game</button>
           </div>
         </div>
         <div class="log-filters">
@@ -48,22 +82,6 @@
         <ul id="log-list" class="log-list"></ul>
       </aside>
     </main>
-    <footer id="action-footer" class="action-footer" aria-label="Current actions" style="display: none">
-      <div class="action-footer__top">
-        <div id="footer-breadcrumb" class="action-footer__breadcrumb"></div>
-        <div id="footer-wrench-count" class="action-footer__wrenches"></div>
-      </div>
-      <div class="action-footer__body">
-        <div class="action-footer__left">
-          <span id="footer-hint" class="action-footer__hint">Roll and group dice to begin.</span>
-          <div id="journal-controls" class="journal-controls journal-controls--footer"></div>
-        </div>
-        <div class="action-footer__right">
-          <button id="advance-phase" type="button">Next Phase</button>
-          <button id="undo-action" type="button">Undo</button>
-        </div>
-      </div>
-    </footer>
     <script src="src/shared/logLevels.js"></script>
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>

@@ -15,7 +15,7 @@
     }
 
     function formatTime(date) {
-      return date.toLocaleTimeString([], {
+      return date.toLocaleString([], {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -41,18 +41,20 @@
           const meta = document.createElement("div");
           meta.className = "log-item__meta";
 
-          const level = document.createElement("span");
-          level.textContent = entry.level.toUpperCase();
-
           const time = document.createElement("span");
-          time.textContent = formatTime(entry.timestamp);
+          time.className = "log-item__time";
+          time.textContent = formatTime(entry.timestamp) + " -- ";
 
-          meta.appendChild(level);
+          const actor = document.createElement("span");
+          actor.className = "log-item__actor";
+          actor.textContent = resolveActor(entry.context);
+
           meta.appendChild(time);
+          meta.appendChild(actor);
 
           const message = document.createElement("div");
           message.className = "log-item__message";
-          message.textContent = entry.message;
+          message.textContent = normalizeMessage(entry.message, entry.context);
 
           item.appendChild(meta);
           item.appendChild(message);
@@ -80,6 +82,23 @@
         unsubscribe();
       },
     };
+  }
+
+  function resolveActor(context) {
+    const playerId = String(context?.playerId || "").trim();
+    if (!playerId) {
+      return "System";
+    }
+    return "You";
+  }
+
+  function normalizeMessage(message, context) {
+    const base = String(message || "");
+    const withYou = base.replace(/^Player X\b/, "You");
+    if (withYou === base && context?.playerId) {
+      return "You: " + base;
+    }
+    return withYou;
   }
 
   root.createLogSidebar = createLogSidebar;

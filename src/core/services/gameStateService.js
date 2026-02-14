@@ -52,7 +52,7 @@
         version: 1,
         currentDay: "Friday",
         turnNumber: 1,
-        phase: "journal",
+        phase: "roll_and_group",
         gameStatus: "active",
         gameStarted: false,
         players: [],
@@ -62,6 +62,7 @@
         workshopSelections: {},
         workshopPhaseContext: {},
         buildDrafts: {},
+        buildDecisions: {},
         undoHistory: [],
         rollAndGroup: {
           dice: [],
@@ -104,6 +105,9 @@
       }
       if (!merged.buildDrafts || typeof merged.buildDrafts !== "object") {
         merged.buildDrafts = {};
+      }
+      if (!merged.buildDecisions || typeof merged.buildDecisions !== "object") {
+        merged.buildDecisions = {};
       }
       if (!Array.isArray(merged.undoHistory)) {
         merged.undoHistory = [];

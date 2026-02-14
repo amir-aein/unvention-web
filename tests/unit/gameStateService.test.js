@@ -29,7 +29,7 @@ test('GameStateService loads, merges defaults, and persists updates', () => {
 
   assert.equal(loaded.currentDay, 'Saturday');
   assert.equal(loaded.turnNumber, 1);
-  assert.equal(loaded.phase, 'journal');
+  assert.equal(loaded.phase, 'roll_and_group');
   assert.equal(loaded.gameStatus, 'active');
   assert.deepEqual(loaded.players, []);
   assert.equal(loaded.rngSeed, 'default-seed');
