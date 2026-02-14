@@ -4,15 +4,8 @@
   function createLogSidebar(loggerService) {
     const logList = document.getElementById("log-list");
     const clearLogButton = document.getElementById("clear-log");
-    const filterCheckboxes = document.querySelectorAll(".log-filters input");
-
-    function getEnabledLevels() {
-      return new Set(
-        Array.from(filterCheckboxes)
-          .filter((checkbox) => checkbox.checked)
-          .map((checkbox) => checkbox.value),
-      );
-    }
+    const playerFilterTabs = document.getElementById("log-player-filter-tabs");
+    let selectedPlayer = "all";
 
     function formatTime(date) {
       return date.toLocaleString([], {
@@ -23,8 +16,13 @@
     }
 
     function render(entries) {
-      const enabledLevels = getEnabledLevels();
-      const visibleEntries = entries.filter((entry) => enabledLevels.has(entry.level));
+      syncPlayerOptions(entries);
+      const visibleEntries = entries.filter((entry) => {
+        if (selectedPlayer === "all") {
+          return true;
+        }
+        return resolveActor(entry.context) === selectedPlayer;
+      });
 
       logList.innerHTML = "";
 
@@ -68,9 +66,24 @@
 
     const unsubscribe = loggerService.subscribe(render);
 
-    filterCheckboxes.forEach((checkbox) => {
-      checkbox.addEventListener("change", () => render(loggerService.getEntries()));
-    });
+    if (playerFilterTabs) {
+      playerFilterTabs.addEventListener("click", (event) => {
+        const target = event.target;
+        if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
+          return;
+        }
+        const tab = target.closest("button[data-player-filter]");
+        if (!tab) {
+          return;
+        }
+        const next = String(tab.getAttribute("data-player-filter") || "all");
+        if (!next || next === selectedPlayer) {
+          return;
+        }
+        selectedPlayer = next;
+        render(loggerService.getEntries());
+      });
+    }
 
     clearLogButton.addEventListener("click", () => {
       loggerService.clear();
@@ -82,23 +95,75 @@
         unsubscribe();
       },
     };
+
+    function syncPlayerOptions(entries) {
+      if (!playerFilterTabs) {
+        return;
+      }
+      const actors = Array.from(
+        new Set(
+          (entries || [])
+            .map((entry) => resolveActor(entry.context))
+            .filter((actor) => actor && actor !== "System"),
+        ),
+      ).sort((a, b) => a.localeCompare(b));
+      const nextValues = ["all"].concat(actors);
+      const existingValues = Array.from(playerFilterTabs.querySelectorAll("button[data-player-filter]"))
+        .map((button) => String(button.getAttribute("data-player-filter") || ""));
+      if (
+        existingValues.length === nextValues.length &&
+        existingValues.every((value, index) => value === nextValues[index])
+      ) {
+        updateActiveTab();
+        return;
+      }
+      playerFilterTabs.innerHTML = nextValues
+        .map((value) => (
+          '<button type="button" class="log-player-tab' +
+          (value === selectedPlayer ? " log-player-tab--active" : "") +
+          '" data-player-filter="' +
+          value +
+          '">' +
+          (value === "all" ? "All" : value) +
+          "</button>"
+        ))
+        .join("");
+      if (!nextValues.includes(selectedPlayer)) {
+        selectedPlayer = "all";
+      }
+      updateActiveTab();
+    }
+
+    function updateActiveTab() {
+      if (!playerFilterTabs) {
+        return;
+      }
+      Array.from(playerFilterTabs.querySelectorAll("button[data-player-filter]")).forEach((button) => {
+        const value = String(button.getAttribute("data-player-filter") || "");
+        button.classList.toggle("log-player-tab--active", value === selectedPlayer);
+      });
+    }
   }
 
   function resolveActor(context) {
+    const playerName = String(context?.playerName || "").trim();
+    if (playerName) {
+      return playerName;
+    }
     const playerId = String(context?.playerId || "").trim();
     if (!playerId) {
       return "System";
     }
-    return "You";
+    return playerId;
   }
 
   function normalizeMessage(message, context) {
-    const base = String(message || "");
-    const withYou = base.replace(/^Player X\b/, "You");
-    if (withYou === base && context?.playerId) {
-      return "You: " + base;
+    const text = String(message || "");
+    const actor = resolveActor(context);
+    if (actor && actor !== "System") {
+      return text.replace(/^Player X\b/, actor);
     }
-    return withYou;
+    return text;
   }
 
   root.createLogSidebar = createLogSidebar;

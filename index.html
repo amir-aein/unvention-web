@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-2" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-3" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
@@ -115,10 +115,9 @@
           </div>
         </div>
         <div class="log-filters">
-          <label><input type="checkbox" value="info" checked /> Info</label>
-          <label><input type="checkbox" value="warn" checked /> Warn</label>
-          <label><input type="checkbox" value="error" checked /> Error</label>
-          <label><input type="checkbox" value="debug" checked /> Debug</label>
+          <div id="log-player-filter-tabs" class="log-player-tabs" role="tablist" aria-label="Log player filter">
+            <button type="button" class="log-player-tab log-player-tab--active" data-player-filter="all">All</button>
+          </div>
         </div>
         <ul id="log-list" class="log-list"></ul>
       </aside>
@@ -127,13 +126,13 @@
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
-    <script src="src/adapters/web/multiplayerClient.js?v=20260214-2"></script>
+    <script src="src/adapters/web/multiplayerClient.js?v=20260214-3"></script>
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
     <script src="src/core/services/roundEngineService.js"></script>
-    <script src="src/ui/vanilla/components/logSidebar.js"></script>
+    <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
-    <script src="src/app/bootstrap.js?v=20260214-2"></script>
+    <script src="src/app/bootstrap.js?v=20260214-5"></script>
   </body>
 </html>

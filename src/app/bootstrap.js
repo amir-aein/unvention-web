@@ -55,6 +55,8 @@
   let waitingForRoomTurnAdvance = false;
   let appliedServerTurnKey = "";
   let localTurnActionCursor = 0;
+  let localTurnActionBuffer = [];
+  let localPublishedActionCursor = 0;
   let awaitingRoomStateRecovery = false;
   let lastSyncedStateSignature = "";
   let reconnectTimer = null;
@@ -74,6 +76,51 @@
   let roomDirectoryLoading = false;
   let roomDirectoryLastFetchAt = 0;
   let roomDirectoryError = "";
+  const originalLogEvent = loggerService.logEvent.bind(loggerService);
+  loggerService.logEvent = function logEventWithTurnCapture(level, message, context) {
+    const entry = originalLogEvent(level, message, context);
+    const localPlayerId = String(multiplayerState.playerId || "").trim();
+    const localPlayerName = String(
+      (Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [])
+        .find((item) => String(item?.playerId || "") === localPlayerId)?.name || "",
+    ).trim();
+    const hasOriginalContext = Boolean(context && typeof context === "object");
+    const originalContext = hasOriginalContext ? context : {};
+    const normalizedContext = {
+      ...(entry?.context && typeof entry.context === "object" ? entry.context : {}),
+      playerId: String((entry?.context && entry.context.playerId) || originalContext.playerId || localPlayerId || ""),
+      playerName: String((entry?.context && entry.context.playerName) || originalContext.playerName || localPlayerName || ""),
+    };
+    const payload = {
+      level: String(entry?.level || "info"),
+      message: String(entry?.message || ""),
+      timestamp: entry?.timestamp instanceof Date ? entry.timestamp.toISOString() : entry?.timestamp || new Date().toISOString(),
+      context: normalizedContext,
+      clientActionId: String(entry?.id || ""),
+    };
+    const source = String(normalizedContext.source || "").trim().toLowerCase();
+    const hasExplicitPlayerContext = hasOriginalContext && String(originalContext.playerId || "").trim().length > 0;
+    const shouldForwardToRoomSharedLog =
+      source !== "network" &&
+      source !== "ui" &&
+      source !== "system" &&
+      hasExplicitPlayerContext;
+    if (
+      isMultiplayerGameActive() &&
+      localPlayerId &&
+      !payload.context.shared &&
+      String(payload.context.playerId || "") === localPlayerId &&
+      shouldForwardToRoomSharedLog
+    ) {
+      localTurnActionBuffer.push(payload);
+      if (multiplayerState.connected) {
+        multiplayerClient.send("player_log_event", {
+          entry: payload,
+        });
+      }
+    }
+    return entry;
+  };
 
   function isGameStarted(state) {
     return Boolean(state && state.gameStarted);
@@ -164,6 +211,8 @@
     waitingForRoomTurnAdvance = false;
     appliedServerTurnKey = "";
     localTurnActionCursor = loggerService.toSerializableEntries().length;
+    localTurnActionBuffer = [];
+    localPublishedActionCursor = 0;
     awaitingRoomStateRecovery = false;
     lastSyncedStateSignature = "";
     activePlayerId = "P1";
@@ -176,6 +225,10 @@
       sessionStorageRef.removeItem(MULTIPLAYER_SESSION_KEY);
     }
     reconnectAttempts = 0;
+  }
+
+  function isInteractionBlocked() {
+    return isOnlineInteractionLocked();
   }
 
   function teardownMultiplayerSession(resetReason) {
@@ -404,6 +457,27 @@
     renderRoomDirectory();
   }
 
+  function importSharedRoomLog(room) {
+    if (!room || !Array.isArray(room.sharedLog)) {
+      return;
+    }
+    const sharedOnly = room.sharedLog.map((entry) => {
+      const context = entry?.context && typeof entry.context === "object" ? entry.context : {};
+      return {
+        id: "shared-" + String(entry?.id || ""),
+        level: String(entry?.level || "info"),
+        message: String(entry?.message || ""),
+        timestamp: entry?.timestamp || new Date().toISOString(),
+        context: {
+          ...context,
+          shared: true,
+          playerId: String(context.playerId || ""),
+        },
+      };
+    }).slice(-MAX_PERSISTED_LOG_ENTRIES);
+    loggerService.replaceEntries(sharedOnly);
+  }
+
   async function ensureMultiplayerConnection() {
     if (multiplayerState.connected || multiplayerState.connecting) {
       return;
@@ -443,6 +517,33 @@
       multiplayerState.room.hostPlayerId === multiplayerState.playerId);
   }
 
+  function resolvePlayerName(playerIdInput) {
+    const playerId = String(playerIdInput || "").trim();
+    if (!playerId) {
+      return "";
+    }
+    const roomPlayers = Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [];
+    const match = roomPlayers.find((item) => String(item?.playerId || "").trim() === playerId);
+    if (match && String(match.name || "").trim()) {
+      return String(match.name || "").trim();
+    }
+    return playerId;
+  }
+
+  function logPlayerAction(message, contextInput) {
+    const playerId = String(activePlayerId || multiplayerState.playerId || "").trim();
+    if (!playerId) {
+      return;
+    }
+    const context = contextInput && typeof contextInput === "object" ? contextInput : {};
+    loggerService.logEvent("info", String(message || "Player action"), {
+      source: "player_action",
+      playerId,
+      playerName: resolvePlayerName(playerId),
+      ...context,
+    });
+  }
+
   function hasLocalPlayerEndedTurnInRoom() {
     const room = multiplayerState.room;
     if (!room || !Array.isArray(room.players) || !multiplayerState.playerId) {
@@ -468,17 +569,14 @@
   }
 
   function getLocalTurnDeltaActions() {
-    const entries = typeof loggerService.toSerializableEntries === "function"
-      ? loggerService.toSerializableEntries()
-      : [];
-    const slice = entries.slice(Math.max(0, localTurnActionCursor));
-    return slice
+    return localTurnActionBuffer
       .filter((entry) => entry && typeof entry === "object")
       .map((entry) => ({
         level: String(entry.level || "info"),
         message: String(entry.message || ""),
         timestamp: entry.timestamp || null,
         context: entry.context && typeof entry.context === "object" ? entry.context : {},
+        clientActionId: String(entry.clientActionId || ""),
       }));
   }
 
@@ -582,20 +680,31 @@
       return;
     }
     lastSyncedStateSignature = signature;
-    multiplayerClient.send("player_state_update", {
+    const unsentActions = localTurnActionBuffer.slice(Math.max(0, localPublishedActionCursor));
+    const sent = multiplayerClient.send("player_state_update", {
       state: payload,
+      actions: unsentActions,
     });
+    if (sent) {
+      localPublishedActionCursor = localTurnActionBuffer.length;
+    }
   }
 
   function submitOnlineEndTurn() {
     if (!isMultiplayerGameActive()) {
       return false;
     }
+    logPlayerAction("Confirmed turn end", {
+      action: "round-end-turn",
+      day: String(roundEngineService.getState().currentDay || ""),
+      turnNumber: Number(roundEngineService.getState().turnNumber || 0),
+    });
     const sent = multiplayerClient.send("end_turn", {
       turnSummary: getCurrentOnlineTurnSummary(),
     });
     if (sent) {
       waitingForRoomTurnAdvance = true;
+      localPublishedActionCursor = localTurnActionBuffer.length;
       loggerService.logEvent("info", "Ended turn online; waiting for other players", { source: "network" });
       renderMultiplayerUi();
       return true;
@@ -727,6 +836,8 @@
         gameStateService.reset();
         persistUndoHistory();
         loggerService.replaceEntries([]);
+        localTurnActionBuffer = [];
+        localPublishedActionCursor = 0;
       }
       gameStateService.update({ gameStarted: false });
       waitingForRoomTurnAdvance = false;
@@ -747,6 +858,8 @@
       gameStateService.reset();
       persistUndoHistory();
       loggerService.replaceEntries([]);
+      localTurnActionBuffer = [];
+      localPublishedActionCursor = 0;
       roundEngineService.initializePlayers([activePlayerId]);
       roundEngineService.setSeed(String(room.code));
       gameStateService.update({ gameStarted: true, activePlayerId });
@@ -759,6 +872,8 @@
       appliedServerTurnKey = incomingTurnKey;
       waitingForRoomTurnAdvance = false;
       localTurnActionCursor = loggerService.toSerializableEntries().length;
+      localTurnActionBuffer = [];
+      localPublishedActionCursor = 0;
       lastSyncedStateSignature = "";
     }
     const me = (room.players || []).find((item) => item.playerId === multiplayerState.playerId);
@@ -823,6 +938,7 @@
     if (type === "room_state") {
       multiplayerState.lastError = "";
       multiplayerState.room = message.room || null;
+      importSharedRoomLog(multiplayerState.room);
       if (message?.you?.playerId) {
         multiplayerState.playerId = String(message.you.playerId);
         activePlayerId = multiplayerState.playerId || activePlayerId;
@@ -3181,6 +3297,10 @@
   }
 
   document.getElementById("advance-phase").addEventListener("click", function onAdvancePhase() {
+    if (isInteractionBlocked()) {
+      return;
+    }
+    logPlayerAction("Advanced phase", { action: "advance-phase" });
     runWithUndo(() => {
       advancePhaseForCurrentMode();
     });
@@ -3364,9 +3484,13 @@
   });
 
   document.getElementById("undo-action").addEventListener("click", function onUndoAction() {
+    if (isInteractionBlocked()) {
+      return;
+    }
     if (undoStack.length === 0) {
       return;
     }
+    logPlayerAction("Undid previous action", { action: "undo" });
     cancelOnlineEndTurnIfNeeded();
     const snapshot = undoStack.pop();
     gameStateService.setState(snapshot.state);
@@ -3383,6 +3507,7 @@
 
     const action = target.getAttribute("data-action");
     if (action === "mp-start-lobby") {
+      logPlayerAction("Started room game", { action });
       multiplayerClient.send("start_game");
       return;
     }
@@ -3393,6 +3518,7 @@
       if (!confirmedCancel) {
         return;
       }
+      logPlayerAction("Canceled multiplayer room", { action });
       multiplayerClient.send("terminate_room");
       return;
     }
@@ -3403,15 +3529,19 @@
       if (!confirmedLeave) {
         return;
       }
+      logPlayerAction("Left multiplayer lobby", { action });
       multiplayerClient.send("leave_room");
       teardownMultiplayerSession("Left multiplayer room");
       return;
     }
-    if (isOnlineInteractionLocked() && action !== "confirm-tool-unlock") {
+    if (isInteractionBlocked() && action !== "confirm-tool-unlock") {
       return;
     }
     if (maybeBlockActionForUnlockPrompt(action)) {
       return;
+    }
+    if (action) {
+      logPlayerAction("Performed action: " + String(action), { action });
     }
 
     if (action === "select-group") {
@@ -3578,7 +3708,7 @@
   });
 
   document.getElementById("journals-container").addEventListener("click", function onJournalClick(event) {
-    if (isOnlineInteractionLocked()) {
+    if (isInteractionBlocked()) {
       return;
     }
     const target = event.target;
@@ -3605,6 +3735,12 @@
     const rowIndex = Math.floor(index / 4);
     const columnIndex = index % 4;
     const journalId = grid.getAttribute("data-journal-id");
+    logPlayerAction("Placed journal number", {
+      action: "journal-place-number",
+      journalId,
+      rowIndex,
+      columnIndex,
+    });
     runWithUndo(() => {
       roundEngineService.placeJournalNumber(activePlayerId, rowIndex, columnIndex, journalId);
       maybeAutoAdvanceAfterJournalProgress();
@@ -3613,7 +3749,7 @@
   });
 
   document.getElementById("workshops-container").addEventListener("click", function onWorkshopClick(event) {
-    if (isOnlineInteractionLocked()) {
+    if (isInteractionBlocked()) {
       return;
     }
     const target = event.target;
@@ -3628,6 +3764,13 @@
     const rowIndex = Number(button.getAttribute("data-row-index"));
     const columnIndex = Number(button.getAttribute("data-column-index"));
     const state = roundEngineService.getState();
+    logPlayerAction("Selected workshop cell", {
+      action: state.phase === "build" ? "build-select-cell" : "workshop-place-part",
+      workshopId,
+      rowIndex,
+      columnIndex,
+      phase: state.phase,
+    });
     runWithUndo(() => {
       if (state.phase === "workshop") {
         const selection = state.workshopSelections?.[activePlayerId];
@@ -3778,7 +3921,7 @@
   });
 
   document.getElementById("inventions-container").addEventListener("click", function onInventionClick(event) {
-    if (isOnlineInteractionLocked()) {
+    if (isInteractionBlocked()) {
       return;
     }
     const target = event.target;
@@ -3808,6 +3951,12 @@
     runWithUndo(() => {
       const placed = roundEngineService.placeMechanismInInvention(activePlayerId, inventionId, rowIndex, columnIndex);
       if (placed.ok) {
+        logPlayerAction("Placed mechanism in invention", {
+          action: "invent-place-mechanism",
+          inventionId,
+          rowIndex,
+          columnIndex,
+        });
         inventionHover = null;
         advancePhaseForCurrentMode();
       }

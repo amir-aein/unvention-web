@@ -1321,11 +1321,40 @@ button:disabled:hover {
 
 .log-filters {
   display: flex;
-  gap: 0.65rem;
+  align-items: center;
+  gap: 0.5rem;
   flex-wrap: wrap;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   color: var(--muted);
   margin: 0.75rem 0;
+}
+
+.log-player-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.log-player-tab {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.75rem;
+  padding: 0.18rem 0.52rem;
+  cursor: pointer;
+}
+
+.log-player-tab:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.log-player-tab--active {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #f8fafc;
 }
 
 .log-list {

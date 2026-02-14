@@ -15,6 +15,7 @@ const DAY_THRESHOLDS = {
   Saturday: 2,
   Sunday: 3,
 };
+const MAX_SHARED_LOG_ENTRIES = 1500;
 
 const rooms = new Map();
 const connectionsById = new Map();
@@ -132,6 +133,10 @@ function handleClientMessage(ws, message) {
     onPlayerStateUpdate(ws, message);
     return;
   }
+  if (type === "player_log_event") {
+    onPlayerLogEvent(ws, message);
+    return;
+  }
   if (type === "end_turn") {
     onEndTurn(ws, message);
     return;
@@ -179,6 +184,7 @@ function onCreateRoom(ws, message) {
       roll: null,
       rolledAt: null,
     },
+    sharedLog: [],
     players: [player],
   };
   rooms.set(roomCode, room);
@@ -289,6 +295,7 @@ function onStartGame(ws) {
     roll: rollFiveDice(),
     rolledAt: Date.now(),
   };
+  room.sharedLog = [];
   room.players.forEach((player) => {
     player.endedTurn = false;
     player.turnSummary = null;
@@ -332,7 +339,9 @@ function onPlayerStateUpdate(ws, message) {
   if (!player) {
     return;
   }
+  const incomingActions = sanitizeSharedActions(message?.actions);
   player.liveState = message?.state || null;
+  appendSharedLogFromLiveActions(room, player, incomingActions);
   player.lastSeenAt = Date.now();
   room.updatedAt = Date.now();
   appendActionLog(room.code, "player_state_update", {
@@ -344,8 +353,28 @@ function onPlayerStateUpdate(ws, message) {
   broadcast(room, "player_state_update", {
     playerId: player.playerId,
     state: player.liveState,
+    actions: incomingActions,
     serverTime: Date.now(),
   });
+  broadcastRoomState(room);
+}
+
+function onPlayerLogEvent(ws, message) {
+  const room = getRoomForConnection(ws);
+  if (!room || room.status !== "in_game") {
+    return;
+  }
+  const player = room.players.find((item) => item.playerId === ws.meta.playerId);
+  if (!player) {
+    return;
+  }
+  const incoming = sanitizeSingleSharedAction(message?.entry);
+  if (!incoming) {
+    return;
+  }
+  appendSharedLogFromLiveActions(room, player, [incoming]);
+  player.lastSeenAt = Date.now();
+  room.updatedAt = Date.now();
   broadcastRoomState(room);
 }
 
@@ -393,6 +422,7 @@ function onEndTurn(ws, message) {
   }
   player.endedTurn = true;
   player.turnSummary = sanitizeTurnSummary(message?.turnSummary);
+  appendSharedLogFromTurnSummary(room, player, player.turnSummary);
   player.lastSeenAt = Date.now();
   room.updatedAt = Date.now();
   appendActionLog(room.code, "end_turn", {
@@ -440,6 +470,7 @@ function onCancelEndTurn(ws, message) {
     return;
   }
   player.endedTurn = false;
+  removeSharedLogForPlayerTurn(room, player.playerId, room.turn.number, room.turn.day);
   player.turnSummary = null;
   player.lastSeenAt = Date.now();
   room.updatedAt = Date.now();
@@ -727,6 +758,15 @@ function serializeRoom(room) {
       roll: room.turn.roll,
       rolledAt: room.turn.rolledAt,
     },
+    sharedLog: Array.isArray(room.sharedLog)
+      ? room.sharedLog.slice(-MAX_SHARED_LOG_ENTRIES).map((entry) => ({
+        id: String(entry?.id || ""),
+        level: String(entry?.level || "info"),
+        message: String(entry?.message || ""),
+        timestamp: entry?.timestamp || null,
+        context: entry?.context && typeof entry.context === "object" ? entry.context : {},
+      }))
+      : [],
     players: room.players.map((player) => ({
       playerId: player.playerId,
       name: player.name,
@@ -736,8 +776,135 @@ function serializeRoom(room) {
       lastSeenAt: player.lastSeenAt,
       canReconnectUntil: player.canReconnectUntil,
       isHost: player.playerId === room.hostPlayerId,
+      liveState: player.liveState || null,
     })),
   };
+}
+
+function appendSharedLogFromTurnSummary(room, player, summary) {
+  if (!room || !player || !summary) {
+    return;
+  }
+  const actions = Array.isArray(summary.actions) ? summary.actions : [];
+  if (actions.length === 0) {
+    return;
+  }
+  const day = String(room.turn?.day || "");
+  const turnNumber = Number(room.turn?.number || 0);
+  if (!Array.isArray(room.sharedLog)) {
+    room.sharedLog = [];
+  }
+  const existingKeys = new Set(
+    room.sharedLog
+      .map((entry) => String(entry?.context?.actionKey || ""))
+      .filter(Boolean),
+  );
+  actions.forEach((action, index) => {
+    const actionContext = action?.context && typeof action.context === "object" ? action.context : {};
+    const clientActionId = String(action?.clientActionId || "").trim();
+    const actionKey = [
+      String(player.playerId || ""),
+      String(turnNumber),
+      String(day),
+      clientActionId || String(index),
+      String(action?.timestamp || ""),
+    ].join("|");
+    if (existingKeys.has(actionKey)) {
+      return;
+    }
+    existingKeys.add(actionKey);
+    room.sharedLog.push({
+      id: randomId(14),
+      level: String(action?.level || "info").slice(0, 16),
+      message: String(action?.message || "").slice(0, 400),
+      timestamp: action?.timestamp || new Date().toISOString(),
+      context: {
+        ...actionContext,
+        playerId: String(actionContext.playerId || player.playerId),
+        playerName: String(player.name || ""),
+        roomCode: String(room.code || ""),
+        turnNumber,
+        day,
+        shared: true,
+        actionKey,
+        sharedOrder: index,
+      },
+    });
+  });
+  if (room.sharedLog.length > MAX_SHARED_LOG_ENTRIES) {
+    room.sharedLog = room.sharedLog.slice(-MAX_SHARED_LOG_ENTRIES);
+  }
+}
+
+function appendSharedLogFromLiveActions(room, player, actions) {
+  if (!room || !player) {
+    return;
+  }
+  const list = Array.isArray(actions) ? actions : [];
+  if (list.length === 0) {
+    return;
+  }
+  const day = String(room.turn?.day || "");
+  const turnNumber = Number(room.turn?.number || 0);
+  if (!Array.isArray(room.sharedLog)) {
+    room.sharedLog = [];
+  }
+  const existingKeys = new Set(
+    room.sharedLog
+      .map((entry) => String(entry?.context?.actionKey || ""))
+      .filter(Boolean),
+  );
+  list.forEach((action, index) => {
+    const actionContext = action?.context && typeof action.context === "object" ? action.context : {};
+    const clientActionId = String(action?.clientActionId || "").trim();
+    const actionKey = [
+      String(player.playerId || ""),
+      String(turnNumber),
+      String(day),
+      clientActionId || String(index),
+      String(action?.timestamp || ""),
+    ].join("|");
+    if (existingKeys.has(actionKey)) {
+      return;
+    }
+    existingKeys.add(actionKey);
+    room.sharedLog.push({
+      id: randomId(14),
+      level: String(action?.level || "info").slice(0, 16),
+      message: String(action?.message || "").slice(0, 400),
+      timestamp: action?.timestamp || new Date().toISOString(),
+      context: {
+        ...actionContext,
+        playerId: String(actionContext.playerId || player.playerId),
+        playerName: String(player.name || ""),
+        roomCode: String(room.code || ""),
+        turnNumber,
+        day,
+        shared: true,
+        actionKey,
+      },
+    });
+  });
+  if (room.sharedLog.length > MAX_SHARED_LOG_ENTRIES) {
+    room.sharedLog = room.sharedLog.slice(-MAX_SHARED_LOG_ENTRIES);
+  }
+}
+
+function removeSharedLogForPlayerTurn(room, playerId, turnNumber, day) {
+  if (!room || !Array.isArray(room.sharedLog)) {
+    return;
+  }
+  const targetPlayerId = String(playerId || "");
+  const targetTurn = Number(turnNumber || 0);
+  const targetDay = String(day || "");
+  room.sharedLog = room.sharedLog.filter((entry) => {
+    const context = entry?.context && typeof entry.context === "object" ? entry.context : {};
+    return !(
+      String(context.playerId || "") === targetPlayerId &&
+      Number(context.turnNumber || 0) === targetTurn &&
+      String(context.day || "") === targetDay
+    );
+  });
 }
 
 function getRoomForConnection(ws) {
@@ -818,7 +985,36 @@ function sanitizeTurnSummary(summaryInput) {
         message: String(action?.message || "").slice(0, 400),
         timestamp: action?.timestamp || null,
         context: action?.context && typeof action.context === "object" ? action.context : {},
+        clientActionId: String(action?.clientActionId || "").slice(0, 64),
       })),
+  };
+}
+
+function sanitizeSharedActions(actionsInput) {
+  if (!Array.isArray(actionsInput)) {
+    return [];
+  }
+  return actionsInput
+    .slice(0, 500)
+    .map((action) => ({
+      level: String(action?.level || "info").slice(0, 16),
+      message: String(action?.message || "").slice(0, 400),
+      timestamp: action?.timestamp || null,
+      context: action?.context && typeof action.context === "object" ? action.context : {},
+      clientActionId: String(action?.clientActionId || "").slice(0, 64),
+    }));
+}
+
+function sanitizeSingleSharedAction(actionInput) {
+  if (!actionInput || typeof actionInput !== "object") {
+    return null;
+  }
+  return {
+    level: String(actionInput?.level || "info").slice(0, 16),
+    message: String(actionInput?.message || "").slice(0, 400),
+    timestamp: actionInput?.timestamp || null,
+    context: actionInput?.context && typeof actionInput.context === "object" ? actionInput.context : {},
+    clientActionId: String(actionInput?.clientActionId || "").slice(0, 64),
   };
 }
 
