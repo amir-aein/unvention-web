@@ -1,5 +1,6 @@
 const PERSONA_NAMES = [
   'tool_investor',
+  'shape_architect',
   'journal_optimizer',
   'invention_sprinter',
   'adaptive_opportunist',
@@ -11,23 +12,57 @@ const BASE_PROFILE = {
   journalGroupFlexWeight: 1,
   ideaTargetPlacementWeight: 1,
   ideaTargetMultiplierWeight: 1,
+  ideaTargetPersonaBiasWeight: 1,
   workshopIdeaWeight: 1,
   workshopOpenWeight: 1,
+  workshopConnectivityWeight: 1,
+  workshopToolPatternWeight: 1,
   buildSizeWeight: 1,
   buildToolTargetWeight: 1,
+  buildShapeRepeatWeight: 1,
   inventCompletionWeight: 1,
   inventVarietyWeight: 1,
   inventIdeaWeight: 1,
+  inventPersonaBiasWeight: 1,
+  preferredInventionId: null,
+};
+
+const VARIETY_BONUS_BY_TYPE_COUNT = {
+  1: 0,
+  2: 3,
+  3: 7,
+  4: 12,
+};
+
+const COMPLETION_BONUS_BY_INVENTION_AND_DAY = {
+  I1: { Friday: 10, Saturday: 8, Sunday: 5 },
+  I2: { Friday: 13, Saturday: 11, Sunday: 8 },
+  I3: { Friday: 18, Saturday: 16, Sunday: 12 },
 };
 
 const PERSONA_OVERRIDES = {
   tool_investor: {
     buildSizeWeight: 1.15,
     buildToolTargetWeight: 2.2,
+    buildShapeRepeatWeight: 1.2,
     workshopIdeaWeight: 1.2,
+    workshopConnectivityWeight: 2,
+    workshopToolPatternWeight: 2.8,
     inventCompletionWeight: 0.9,
     inventVarietyWeight: 1.1,
     inventIdeaWeight: 1.2,
+    preferredInventionId: 'I2',
+  },
+  shape_architect: {
+    buildSizeWeight: 0.95,
+    buildToolTargetWeight: 2.6,
+    buildShapeRepeatWeight: 3.4,
+    workshopConnectivityWeight: 1.7,
+    workshopToolPatternWeight: 3.2,
+    inventCompletionWeight: 0.9,
+    inventVarietyWeight: 1.1,
+    inventIdeaWeight: 1.3,
+    preferredInventionId: 'I2',
   },
   journal_optimizer: {
     journalValueWeight: 1.1,
@@ -36,18 +71,24 @@ const PERSONA_OVERRIDES = {
     ideaTargetPlacementWeight: 1.2,
     ideaTargetMultiplierWeight: 1.2,
     workshopIdeaWeight: 1.1,
+    workshopConnectivityWeight: 0.9,
+    workshopToolPatternWeight: 1.2,
     buildSizeWeight: 0.9,
     buildToolTargetWeight: 0.9,
     inventCompletionWeight: 0.85,
+    preferredInventionId: 'I3',
   },
   invention_sprinter: {
     journalCompletionWeight: 0.8,
     workshopOpenWeight: 1.1,
+    workshopConnectivityWeight: 1.2,
+    workshopToolPatternWeight: 1.8,
     buildSizeWeight: 1.1,
     buildToolTargetWeight: 1.3,
     inventCompletionWeight: 1.9,
     inventVarietyWeight: 1.5,
     inventIdeaWeight: 1.4,
+    preferredInventionId: 'I1',
   },
 };
 
@@ -226,19 +267,23 @@ function findBestJournalPlacement(engine, playerId, profile) {
   return best;
 }
 
-function chooseIdeaTargetInvention(player, profile) {
+function chooseIdeaTargetInvention(engine, player, profile) {
   const inventions = (Array.isArray(player.inventions) ? player.inventions : []).filter((item) => !item.presentedDay);
   let best = null;
   inventions.forEach((invention) => {
-    const placements = Array.isArray(invention.placements) ? invention.placements.length : 0;
+    const current = computeInventionScore(engine, player, invention, {});
+    const projected = computeInventionScore(engine, player, invention, {
+      extraIdeas: 1,
+    });
+    const gain = projected.total - current.total;
     const currentMultiplier = Number(invention.uniqueIdeasMarked || invention.multiplier || 1);
-    const completion = invention.completionStatus === 'complete' ? 1 : 0;
+    const headroom = Math.max(0, 6 - currentMultiplier);
     const candidate = {
       inventionId: invention.id,
       score:
-        placements * 5 * profile.ideaTargetPlacementWeight +
-        currentMultiplier * 2 * profile.ideaTargetMultiplierWeight +
-        completion * profile.inventCompletionWeight,
+        gain * 20 * profile.ideaTargetMultiplierWeight +
+        headroom * profile.ideaTargetPlacementWeight +
+        (invention.id === profile.preferredInventionId ? 6 * profile.ideaTargetPersonaBiasWeight : 0),
     };
     if (!best || candidate.score > best.score) {
       best = candidate;
@@ -260,7 +305,7 @@ function assignPendingIdeas(engine, playerId, profile) {
       break;
     }
 
-    const target = chooseIdeaTargetInvention(player, profile);
+    const target = chooseIdeaTargetInvention(engine, player, profile);
     if (!target) {
       break;
     }
@@ -412,7 +457,82 @@ function couldPlaceFromValues(cell, values) {
   return values.includes(Number(cell.value));
 }
 
-function scoreWorkshopCell(workshop, row, col, profile) {
+function getUnlockableToolVariants(engine, player) {
+  const tools = getUnlockableTools(engine, player);
+  if (
+    typeof engine?.patternToPoints !== 'function' ||
+    typeof engine?.getMechanismShapeVariants !== 'function'
+  ) {
+    return [];
+  }
+  const variants = [];
+  tools.forEach((tool) => {
+    const points = engine.patternToPoints(tool.pattern || []);
+    const shapes = engine.getMechanismShapeVariants(points, true);
+    shapes.forEach((shape) => {
+      variants.push({
+        toolId: tool.id,
+        firstUnlockPoints: Number(tool.firstUnlockPoints || 0),
+        points: shape,
+      });
+    });
+  });
+  return variants;
+}
+
+function scoreToolPatternProgress(workshop, row, col, toolVariants) {
+  const variants = Array.isArray(toolVariants) ? toolVariants : [];
+  if (variants.length === 0) {
+    return 0;
+  }
+  const cells = Array.isArray(workshop?.cells) ? workshop.cells : [];
+  const rowCount = cells.length;
+  const colCount = cells.reduce((max, current) => Math.max(max, Array.isArray(current) ? current.length : 0), 0);
+  let best = 0;
+
+  variants.forEach((variant) => {
+    const points = Array.isArray(variant.points) ? variant.points : [];
+    if (points.length === 0) {
+      return;
+    }
+    const maxRow = Math.max(...points.map((point) => Number(point.row)));
+    const maxCol = Math.max(...points.map((point) => Number(point.col)));
+    for (let offsetRow = 0; offsetRow < rowCount - maxRow; offsetRow += 1) {
+      for (let offsetCol = 0; offsetCol < colCount - maxCol; offsetCol += 1) {
+        let includesCandidate = false;
+        let valid = true;
+        let circled = 0;
+        points.forEach((point) => {
+          const placedRow = offsetRow + Number(point.row);
+          const placedCol = offsetCol + Number(point.col);
+          if (placedRow === row && placedCol === col) {
+            includesCandidate = true;
+          }
+          const cell = cells?.[placedRow]?.[placedCol];
+          if (!cell || cell.kind === 'empty') {
+            valid = false;
+            return;
+          }
+          if (cell.circled) {
+            circled += 1;
+          }
+        });
+        if (!valid || !includesCandidate) {
+          continue;
+        }
+        const filledAfterMove = circled + 1;
+        const progress = (filledAfterMove / Math.max(1, points.length)) * Number(variant.firstUnlockPoints || 1);
+        if (progress > best) {
+          best = progress;
+        }
+      }
+    }
+  });
+
+  return best;
+}
+
+function scoreWorkshopCell(workshop, row, col, profile, toolVariants) {
   const ideas = Array.isArray(workshop.ideas) ? workshop.ideas : [];
   let ideaBonus = 0;
   ideas.forEach((idea) => {
@@ -429,7 +549,31 @@ function scoreWorkshopCell(workshop, row, col, profile) {
       ideaBonus += 4 * profile.workshopIdeaWeight;
     }
   });
-  return 2 * profile.workshopOpenWeight + ideaBonus;
+  const cells = Array.isArray(workshop?.cells) ? workshop.cells : [];
+  const neighbors = [
+    { row: row - 1, col },
+    { row: row + 1, col },
+    { row, col: col - 1 },
+    { row, col: col + 1 },
+  ];
+  let circledNeighbors = 0;
+  let openNeighbors = 0;
+  neighbors.forEach((point) => {
+    const cell = cells?.[point.row]?.[point.col];
+    if (!cell || cell.kind === 'empty') {
+      return;
+    }
+    if (cell.circled) {
+      circledNeighbors += 1;
+    } else {
+      openNeighbors += 1;
+    }
+  });
+  const connectivityBonus =
+    circledNeighbors * 4 * profile.workshopConnectivityWeight +
+    openNeighbors * profile.workshopConnectivityWeight;
+  const toolPatternBonus = scoreToolPatternProgress(workshop, row, col, toolVariants) * profile.workshopToolPatternWeight;
+  return 2 * profile.workshopOpenWeight + ideaBonus + connectivityBonus + toolPatternBonus;
 }
 
 function selectBestWorkshopGroup(engine, playerId, profile) {
@@ -481,6 +625,7 @@ function findBestWorkshopPlacement(engine, playerId, profile) {
   }
 
   let best = null;
+  const toolVariants = getUnlockableToolVariants(engine, player);
   (Array.isArray(player.workshops) ? player.workshops : []).forEach((workshop) => {
     getOpenWorkshopCells(workshop).forEach((entry) => {
       choices.forEach((choice) => {
@@ -492,7 +637,7 @@ function findBestWorkshopPlacement(engine, playerId, profile) {
           row: entry.row,
           col: entry.col,
           choice,
-          score: scoreWorkshopCell(workshop, entry.row, entry.col, profile),
+          score: scoreWorkshopCell(workshop, entry.row, entry.col, profile, toolVariants),
         };
         if (!best || candidate.score > best.score) {
           best = candidate;
@@ -568,6 +713,202 @@ function playWorkshopPhase(engine, playerId, trace, personaName, profile) {
 
 function pointKey(point) {
   return String(point.row) + ':' + String(point.col);
+}
+
+function countOpenCells(patternRows) {
+  return patternRows.reduce((sum, row) => sum + row.split('').filter((cell) => cell === '1').length, 0);
+}
+
+function getMechanismById(player, mechanismId) {
+  return (Array.isArray(player?.mechanisms) ? player.mechanisms : []).find((item) => item.id === mechanismId) || null;
+}
+
+function getInventionPlacedMechanisms(player, invention) {
+  const placements = Array.isArray(invention?.placements) ? invention.placements : [];
+  const mechanisms = placements
+    .map((placement) => getMechanismById(player, placement.mechanismId))
+    .filter(Boolean);
+  return mechanisms;
+}
+
+function getMechanismSignature(engine, mechanism) {
+  if (!engine || typeof engine.getMechanismShapeSignature !== 'function') {
+    return '';
+  }
+  const path = Array.isArray(mechanism?.path) ? mechanism.path : [];
+  return engine.getMechanismShapeSignature(path, true);
+}
+
+function computeInventionScore(engine, player, invention, options = {}) {
+  const extraIdeas = Number(options.extraIdeas || 0);
+  const extraMechanism = options.extraMechanism || null;
+  const extraPlacementSize = Number(options.extraPlacementSize || 0);
+  const currentDay = String(options.currentDay || 'Sunday');
+
+  const mechanisms = getInventionPlacedMechanisms(player, invention);
+  if (extraMechanism) {
+    mechanisms.push(extraMechanism);
+  }
+
+  const currentMultiplier = Number(invention.uniqueIdeasMarked || invention.multiplier || 1);
+  const nextMultiplier = Math.min(6, Math.max(1, currentMultiplier + extraIdeas));
+
+  const workshopTypes = new Set(
+    Object.entries(invention.workshopTypeMarks || {})
+      .filter(([_id, marked]) => Boolean(marked))
+      .map(([id]) => id),
+  );
+  if (extraMechanism?.workshopId) {
+    workshopTypes.add(String(extraMechanism.workshopId));
+  }
+  const variety = Number(VARIETY_BONUS_BY_TYPE_COUNT[Math.min(4, workshopTypes.size)] || 0);
+
+  const rows = (Array.isArray(invention.pattern) ? invention.pattern : []).map((row) => String(row));
+  const openCellCount = countOpenCells(rows);
+  const filledCellCount = (Array.isArray(invention.placements) ? invention.placements : []).reduce(
+    (sum, placement) => sum + (Array.isArray(placement.cells) ? placement.cells.length : 0),
+    0,
+  ) + extraPlacementSize;
+  const complete = openCellCount > 0 && filledCellCount >= openCellCount;
+  const completion = complete ? Number(COMPLETION_BONUS_BY_INVENTION_AND_DAY[invention.id]?.[currentDay] || 0) : 0;
+
+  let unique = 0;
+  if (invention.criterionKey === 'intricacy') {
+    unique = mechanisms.length * nextMultiplier;
+  } else if (invention.criterionKey === 'synchrony') {
+    const counts = new Map();
+    mechanisms.forEach((mechanism) => {
+      const signature = getMechanismSignature(engine, mechanism);
+      counts.set(signature, Number(counts.get(signature) || 0) + 1);
+    });
+    const mostRepeated = Math.max(0, ...Array.from(counts.values()));
+    unique = mostRepeated * nextMultiplier;
+  } else if (invention.criterionKey === 'modularity') {
+    const sizeCount = new Set(
+      mechanisms.map((mechanism) => (Array.isArray(mechanism.path) ? mechanism.path.length : 0)),
+    ).size;
+    unique = sizeCount * nextMultiplier;
+  }
+
+  return {
+    variety,
+    completion,
+    unique,
+    total: variety + completion + unique,
+  };
+}
+
+function getUnlockableTools(engine, player) {
+  const catalog = typeof engine.getDefaultToolCatalog === 'function' ? engine.getDefaultToolCatalog() : [];
+  const unlocked = new Set((Array.isArray(player?.unlockedTools) ? player.unlockedTools : []).map((item) => String(item.id)));
+  return catalog
+    .filter((tool) => !unlocked.has(String(tool.id)))
+    .map((tool) => ({
+      id: tool.id,
+      shapeSignature: String(tool.shapeSignature || ''),
+      pattern: Array.isArray(tool.pattern) ? tool.pattern.map((row) => String(row)) : [],
+      firstUnlockPoints: Number(tool.firstUnlockPoints || 0),
+      size: Array.isArray(tool.pattern)
+        ? tool.pattern.reduce((sum, row) => sum + String(row).split('').filter((cell) => cell === '1').length, 0)
+        : 0,
+    }));
+}
+
+function getShapeFrequency(engine, mechanisms) {
+  const frequency = new Map();
+  (Array.isArray(mechanisms) ? mechanisms : []).forEach((mechanism) => {
+    const signature = getMechanismSignature(engine, mechanism);
+    if (!signature) {
+      return;
+    }
+    frequency.set(signature, Number(frequency.get(signature) || 0) + 1);
+  });
+  return frequency;
+}
+
+function getNeighbors(point) {
+  return [
+    { row: point.row - 1, col: point.col },
+    { row: point.row + 1, col: point.col },
+    { row: point.row, col: point.col - 1 },
+    { row: point.row, col: point.col + 1 },
+  ];
+}
+
+function buildConnectedOrder(points) {
+  const byKey = new Map((Array.isArray(points) ? points : []).map((point) => [pointKey(point), point]));
+  const keys = Array.from(byKey.keys()).sort();
+  if (keys.length === 0) {
+    return [];
+  }
+  const order = [];
+  const seen = new Set();
+  const stack = [keys[0]];
+  while (stack.length > 0) {
+    const key = stack.pop();
+    if (seen.has(key) || !byKey.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    order.push(byKey.get(key));
+    getNeighbors(byKey.get(key))
+      .map((neighbor) => pointKey(neighbor))
+      .filter((neighborKey) => byKey.has(neighborKey) && !seen.has(neighborKey))
+      .sort()
+      .reverse()
+      .forEach((neighborKey) => stack.push(neighborKey));
+  }
+  return order;
+}
+
+function enumerateConnectedSubsets(points, maxSize, maxCandidates) {
+  const cells = Array.isArray(points) ? points : [];
+  const byKey = new Map(cells.map((point) => [pointKey(point), point]));
+  const allKeys = Array.from(byKey.keys()).sort();
+  const unique = new Map();
+  let guard = 0;
+
+  function expand(selectedKeys) {
+    guard += 1;
+    if (guard > maxCandidates * 20 || unique.size >= maxCandidates) {
+      return;
+    }
+    if (selectedKeys.size >= 2) {
+      const signature = Array.from(selectedKeys).sort().join('|');
+      if (!unique.has(signature)) {
+        unique.set(signature, Array.from(selectedKeys).map((key) => byKey.get(key)));
+      }
+    }
+    if (selectedKeys.size >= maxSize) {
+      return;
+    }
+    const frontier = new Set();
+    selectedKeys.forEach((key) => {
+      const point = byKey.get(key);
+      getNeighbors(point)
+        .map((neighbor) => pointKey(neighbor))
+        .forEach((neighborKey) => {
+          if (byKey.has(neighborKey) && !selectedKeys.has(neighborKey)) {
+            frontier.add(neighborKey);
+          }
+        });
+    });
+    Array.from(frontier)
+      .sort()
+      .forEach((nextKey) => {
+        const next = new Set(selectedKeys);
+        next.add(nextKey);
+        expand(next);
+      });
+  }
+
+  allKeys.forEach((startKey) => {
+    if (unique.size >= maxCandidates) {
+      return;
+    }
+    expand(new Set([startKey]));
+  });
+  return Array.from(unique.values());
 }
 
 function collectWorkshopComponents(state, playerId) {
@@ -662,14 +1003,59 @@ function getIdeaCoverageScore(workshop, path) {
 }
 
 function chooseBuildComponent(engine, state, playerId, profile) {
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return null;
+  }
   const components = collectWorkshopComponents(state, playerId);
+  const unlockableTools = getUnlockableTools(engine, player);
+  const toolBySignature = new Map(unlockableTools.map((tool) => [tool.shapeSignature, tool]));
+  const maxToolSize = unlockableTools.reduce((max, tool) => Math.max(max, Number(tool.size || 0)), 2);
+  const shapeFrequency = getShapeFrequency(engine, player.mechanisms);
   let best = null;
+
+  components.forEach((component) => {
+    if (toolBySignature.size === 0) {
+      return;
+    }
+    const subsets = enumerateConnectedSubsets(component.path, Math.max(2, maxToolSize), 900);
+    subsets.forEach((subset) => {
+      const signature = engine.getMechanismShapeSignature(subset, true);
+      const tool = toolBySignature.get(signature);
+      if (!tool) {
+        return;
+      }
+      const repeatScore = Number(shapeFrequency.get(signature) || 0);
+      const score =
+        1000 +
+        tool.firstUnlockPoints * 80 * profile.buildToolTargetWeight +
+        repeatScore * 30 * profile.buildShapeRepeatWeight +
+        getIdeaCoverageScore(component.workshop, subset) * 2 * profile.workshopIdeaWeight +
+        subset.length * profile.buildSizeWeight;
+      if (!best || score > best.score) {
+        best = {
+          workshopId: component.workshopId,
+          workshop: component.workshop,
+          path: buildConnectedOrder(subset),
+          score,
+          toolTargetId: tool.id,
+        };
+      }
+    });
+  });
+
+  if (best) {
+    return best;
+  }
+
   components.forEach((component) => {
     const size = component.path.length;
+    const signature = engine.getMechanismShapeSignature(component.path, true);
+    const repeatScore = Number(shapeFrequency.get(signature) || 0);
     const toolTarget = getToolTargetScore(size) * profile.buildToolTargetWeight;
     const ideaCoverage = getIdeaCoverageScore(component.workshop, component.path) * profile.workshopIdeaWeight;
     const sizeValue = size * profile.buildSizeWeight;
-    const score = sizeValue + toolTarget + ideaCoverage;
+    const score = sizeValue + toolTarget + ideaCoverage + repeatScore * 6 * profile.buildShapeRepeatWeight;
     if (!best || score > best.score) {
       best = { ...component, score };
     }
@@ -683,10 +1069,17 @@ function playBuildPhase(engine, playerId, trace, personaName, profile) {
     const component = chooseBuildComponent(engine, state, playerId, profile);
     if (component) {
       engine.clearMechanismDraft(playerId);
+      let draftOk = true;
       component.path.forEach((point) => {
-        engine.updateMechanismDraft(playerId, component.workshopId, point.row, point.col);
+        if (!draftOk) {
+          return;
+        }
+        const draftResult = engine.updateMechanismDraft(playerId, component.workshopId, point.row, point.col);
+        if (!draftResult.ok) {
+          draftOk = false;
+        }
       });
-      const result = engine.finishBuildingMechanism(playerId);
+      const result = draftOk ? engine.finishBuildingMechanism(playerId) : { ok: false };
       if (result.ok) {
         trace.push({
           playerId,
@@ -695,7 +1088,10 @@ function playBuildPhase(engine, playerId, trace, personaName, profile) {
           action: 'finishBuildingMechanism',
           workshopId: component.workshopId,
           size: component.path.length,
+          toolTargetId: component.toolTargetId || null,
         });
+      } else {
+        engine.clearMechanismDraft(playerId);
       }
     }
   }
@@ -707,10 +1103,6 @@ function getPatternBounds(pattern) {
   const rowCount = rows.length;
   const colCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
   return { rowCount, colCount, rows };
-}
-
-function countOpenCells(patternRows) {
-  return patternRows.reduce((sum, row) => sum + row.split('').filter((cell) => cell === '1').length, 0);
 }
 
 function findBestInventPlacement(engine, playerId, profile) {
@@ -749,8 +1141,9 @@ function findBestInventPlacement(engine, playerId, profile) {
         .flatMap((placement) => (Array.isArray(placement.cells) ? placement.cells : []))
         .map((cell) => pointKey(cell)),
     );
-    const openCellCount = countOpenCells(bounds.rows);
-    const filledNow = occupied.size;
+    const currentScore = computeInventionScore(engine, player, invention, {
+      currentDay: state.currentDay,
+    });
 
     transforms.forEach((transform) => {
       const shape = engine.transformMechanismShape(mechanism.path, transform);
@@ -770,18 +1163,27 @@ function findBestInventPlacement(engine, playerId, profile) {
             continue;
           }
 
-          const nextFilled = filledNow + placementCells.length;
-          const completionBonus = (nextFilled >= openCellCount ? 25 : (nextFilled / Math.max(1, openCellCount)) * 10)
-            * profile.inventCompletionWeight;
-          const newWorkshopMark = (invention.workshopTypeMarks?.[mechanism.workshopId] ? 0 : 6)
-            * profile.inventVarietyWeight;
-          const ideaValue = Number(mechanism.ideaCount || 0) * 8 * profile.inventIdeaWeight;
+          const projected = computeInventionScore(engine, player, invention, {
+            currentDay: state.currentDay,
+            extraMechanism: mechanism,
+            extraIdeas: Number(mechanism.ideaCount || 0),
+            extraPlacementSize: placementCells.length,
+          });
+          const completionDelta = projected.completion - currentScore.completion;
+          const varietyDelta = projected.variety - currentScore.variety;
+          const uniqueDelta = projected.unique - currentScore.unique;
+          const totalDelta = projected.total - currentScore.total;
           const candidate = {
             inventionId: invention.id,
             anchorRow: row,
             anchorCol: col,
             transform,
-            score: completionBonus + newWorkshopMark + ideaValue,
+            score:
+              totalDelta * 20 +
+              completionDelta * 2 * profile.inventCompletionWeight +
+              varietyDelta * 3 * profile.inventVarietyWeight +
+              uniqueDelta * 4 * profile.inventIdeaWeight +
+              (invention.id === profile.preferredInventionId ? 8 * profile.inventPersonaBiasWeight : 0),
           };
 
           if (!best || candidate.score > best.score) {

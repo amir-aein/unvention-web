@@ -91,15 +91,64 @@ function createPlayerIds(count) {
   return Array.from({ length: count }, (_item, index) => 'P' + String(index + 1));
 }
 
-function assignPersonas(playerIds, personaPool, gameIndex) {
-  const ids = Array.isArray(playerIds) ? playerIds : [];
+function createSeededRng(seedText) {
+  const text = String(seedText || 'sim-seed');
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  let state = hash >>> 0;
+  return function nextRandom() {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleInPlace(items, rng) {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(rng() * (index + 1));
+    const current = items[index];
+    items[index] = items[swapIndex];
+    items[swapIndex] = current;
+  }
+}
+
+function createPersonaAssignmentsByGame(config) {
   const personas =
-    Array.isArray(personaPool) && personaPool.length > 0
-      ? personaPool
+    Array.isArray(config.personas) && config.personas.length > 0
+      ? config.personas
       : ['adaptive_opportunist'];
+  const rng = createSeededRng(config.seedBase + '-persona-plan');
+  const gameCount = Math.max(1, Number(config.runs || 1));
+  const playerCount = Math.max(1, Number(config.players || 1));
+  const byGame = [];
+  for (let gameIndex = 0; gameIndex < gameCount; gameIndex += 1) {
+    const picks = [];
+    const fullCycles = Math.floor(playerCount / personas.length);
+    for (let cycle = 0; cycle < fullCycles; cycle += 1) {
+      picks.push(...personas);
+    }
+    const remainder = playerCount % personas.length;
+    if (remainder > 0) {
+      const remainderPool = [...personas];
+      shuffleInPlace(remainderPool, rng);
+      picks.push(...remainderPool.slice(0, remainder));
+    }
+    shuffleInPlace(picks, rng);
+    byGame.push(picks);
+  }
+  return byGame;
+}
+
+function assignPersonas(playerIds, gamePersonas) {
+  const ids = Array.isArray(playerIds) ? playerIds : [];
   const assignments = {};
   ids.forEach((playerId, index) => {
-    assignments[playerId] = personas[(gameIndex + index) % personas.length];
+    assignments[playerId] = gamePersonas[index] || 'adaptive_opportunist';
   });
   return assignments;
 }
@@ -257,9 +306,9 @@ function recordActionMetrics(metrics, event) {
   }
 }
 
-function runGame(gameIndex, config) {
+function runGame(gameIndex, config, personaAssignmentsByGame) {
   const playerIds = createPlayerIds(config.players);
-  const personaAssignments = assignPersonas(playerIds, config.personas, gameIndex);
+  const personaAssignments = assignPersonas(playerIds, personaAssignmentsByGame[gameIndex] || []);
   const seed = config.seedBase + '-' + String(gameIndex + 1);
   const harness = createConfiguredHarness({ playerIds, seed });
 
@@ -456,12 +505,13 @@ function writeOutputs(config, summaries, traces) {
 
 function main() {
   const config = parseArgs(process.argv.slice(2));
+  const personaAssignmentsByGame = createPersonaAssignmentsByGame(config);
 
   const summaries = [];
   const traces = [];
 
   for (let gameIndex = 0; gameIndex < config.runs; gameIndex += 1) {
-    const result = runGame(gameIndex, config);
+    const result = runGame(gameIndex, config, personaAssignmentsByGame);
     const state = result.state;
     const players = summarizePlayers(state);
     const winner = getWinnerDetails(players);
