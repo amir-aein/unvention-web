@@ -242,6 +242,93 @@ test('RoundEngineService initializes players with default journals', () => {
   assert.equal(p1.inventions[0].multiplier, 1);
 });
 
+test('RoundEngineService initializes players with configured journal/workshop counts', () => {
+  const harness = createHarness({
+    gameConfig: {
+      journalCount: 2,
+      workshopCount: 3,
+    },
+  });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+
+  assert.ok(p1);
+  assert.equal(p1.journals.length, 2);
+  assert.equal(p1.workshops.length, 3);
+  assert.deepEqual(Object.keys(p1.inventions[0].workshopTypeMarks), ['W1', 'W2', 'W3']);
+});
+
+test('RoundEngineService clamps completed journals to configured count', () => {
+  const harness = createHarness({
+    gameConfig: {
+      journalCount: 4,
+      workshopCount: 4,
+    },
+  });
+  harness.engine.updatePlayerJournalCompletion('P1', 99);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+
+  assert.ok(p1);
+  assert.equal(p1.completedJournals, 4);
+});
+
+test('RoundEngineService uses custom ruleset catalogs from game config', () => {
+  const harness = createHarness({
+    gameConfig: {
+      journalCount: 1,
+      workshopCount: 1,
+      ruleset: {
+        inventionTemplates: [
+          {
+            id: 'IX',
+            name: 'Custom Invention',
+            criterionKey: 'intricacy',
+            criterionLabel: 'Intricacy',
+            pattern: ['11', '11'],
+          },
+        ],
+        toolTemplates: [
+          {
+            id: 'TX',
+            name: 'Custom Tool',
+            firstUnlockPoints: 9,
+            laterUnlockPoints: 4,
+            abilityText: 'Custom ability.',
+            pattern: ['11'],
+          },
+        ],
+        workshopLayouts: [
+          [
+            [1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1],
+          ],
+        ],
+        workshopIdeaAnchors: {
+          W1: [{ row: 0, col: 0 }],
+        },
+      },
+    },
+  });
+
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  const tools = harness.engine.getDefaultToolCatalog();
+
+  assert.ok(p1);
+  assert.equal(p1.inventions.length, 1);
+  assert.equal(p1.inventions[0].id, 'IX');
+  assert.equal(p1.workshops.length, 1);
+  assert.equal(p1.workshops[0].cells[0][0].value, 1);
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0].id, 'TX');
+});
+
 test('RoundEngineService requires journaling selection and placement before phase ends', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);

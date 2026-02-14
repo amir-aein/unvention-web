@@ -1324,16 +1324,19 @@ button:disabled:hover {
   color: #0f172a;
 }
 
-#player-state-panel #reset-game {
-  margin-top: 0.45rem;
-  width: 100%;
+.button-destructive {
   border-color: #fecaca;
   color: #b91c1c;
   background: #fff1f2;
 }
 
-#player-state-panel #reset-game:hover {
+.button-destructive:hover {
   background: #ffe4e6;
+}
+
+#player-state-panel #reset-game {
+  margin-top: 0.45rem;
+  width: 100%;
 }
 
 .log-header {

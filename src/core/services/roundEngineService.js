@@ -195,6 +195,29 @@
     return WORKSHOP_LAYOUTS;
   }
 
+  function normalizeCount(value, fallback, minimum, maximum) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+  }
+
+  function normalizeGameConfig(input) {
+    const candidate = input && typeof input === "object" ? input : {};
+    const customRuleset = candidate.ruleset && typeof candidate.ruleset === "object"
+      ? JSON.parse(JSON.stringify(candidate.ruleset))
+      : null;
+    const maxWorkshopCount = Array.isArray(customRuleset?.workshopLayouts) && customRuleset.workshopLayouts.length > 0
+      ? customRuleset.workshopLayouts.length
+      : WORKSHOP_LAYOUTS.length;
+    return {
+      journalCount: normalizeCount(candidate.journalCount, JOURNAL_COUNT, 1, 6),
+      workshopCount: normalizeCount(candidate.workshopCount, WORKSHOP_COUNT, 1, maxWorkshopCount),
+      ruleset: customRuleset,
+    };
+  }
+
   class RoundEngineService {
     constructor(gameStateService, loggerService, diceRoller) {
       this.gameStateService = gameStateService;
@@ -210,8 +233,63 @@
       return [...PHASES];
     }
 
+    getGameConfig(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      return normalizeGameConfig(state.gameConfig);
+    }
+
+    getRuleset(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      const config = this.getGameConfig(state);
+      const globalDefault = typeof root.createDefaultRuleset === "function" ? root.createDefaultRuleset() : {};
+      const custom = config.ruleset && typeof config.ruleset === "object" ? config.ruleset : null;
+      const ruleset = custom
+        ? {
+            ...globalDefault,
+            ...custom,
+          }
+        : globalDefault;
+      return {
+        inventionTemplates: Array.isArray(ruleset.inventionTemplates) && ruleset.inventionTemplates.length > 0
+          ? ruleset.inventionTemplates
+          : INVENTION_TEMPLATES,
+        toolTemplates: Array.isArray(ruleset.toolTemplates) && ruleset.toolTemplates.length > 0
+          ? ruleset.toolTemplates
+          : TOOL_TEMPLATES,
+        workshopLayouts: Array.isArray(ruleset.workshopLayouts) && ruleset.workshopLayouts.length > 0
+          ? ruleset.workshopLayouts
+          : WORKSHOP_LAYOUTS,
+        workshopIdeaAnchors: ruleset.workshopIdeaAnchors && typeof ruleset.workshopIdeaAnchors === "object"
+          ? ruleset.workshopIdeaAnchors
+          : WORKSHOP_IDEA_ANCHORS,
+        varietyBonusByTypeCount: ruleset.varietyBonusByTypeCount && typeof ruleset.varietyBonusByTypeCount === "object"
+          ? ruleset.varietyBonusByTypeCount
+          : VARIETY_BONUS_BY_TYPE_COUNT,
+        completionBonusByInventionAndDay: ruleset.completionBonusByInventionAndDay &&
+          typeof ruleset.completionBonusByInventionAndDay === "object"
+          ? ruleset.completionBonusByInventionAndDay
+          : COMPLETION_BONUS_BY_INVENTION_AND_DAY,
+      };
+    }
+
+    getWorkshopLayoutsForSeed(_seed, stateInput) {
+      // Intentionally fixed for now; later this can return a deterministic
+      // permutation based on seed without changing workshop consumers.
+      const ruleset = this.getRuleset(stateInput);
+      return ruleset.workshopLayouts;
+    }
+
+    getWorkshopIds(stateInput) {
+      const config = this.getGameConfig(stateInput);
+      return Array.from({ length: config.workshopCount }, (_item, index) => "W" + String(index + 1));
+    }
+
     getDefaultInventionCatalog() {
-      return INVENTION_TEMPLATES.map((template) => ({
+      const ruleset = this.getRuleset();
+      const templates = Array.isArray(ruleset.inventionTemplates)
+        ? ruleset.inventionTemplates
+        : INVENTION_TEMPLATES;
+      return templates.map((template) => ({
         id: template.id,
         name: template.name,
         criterionKey: template.criterionKey,
@@ -221,7 +299,9 @@
     }
 
     getDefaultToolCatalog() {
-      return TOOL_TEMPLATES.map((template) => {
+      const ruleset = this.getRuleset();
+      const templates = Array.isArray(ruleset.toolTemplates) ? ruleset.toolTemplates : TOOL_TEMPLATES;
+      return templates.map((template) => {
         const pattern = template.pattern.map((row) => String(row));
         const points = this.patternToPoints(pattern);
         return {
@@ -1439,8 +1519,14 @@
         .filter(([_workshopId, marked]) => Boolean(marked))
         .map(([workshopId]) => workshopId);
       const typeCount = usedWorkshopTypes.length;
+      const ruleset = this.getRuleset();
+      const varietyBonusByTypeCount = ruleset.varietyBonusByTypeCount || VARIETY_BONUS_BY_TYPE_COUNT;
+      const maxVarietyTypeCount = Math.max(
+        0,
+        ...Object.keys(varietyBonusByTypeCount).map((value) => Number(value)),
+      );
       const variety = typeCount > 0
-        ? Number(VARIETY_BONUS_BY_TYPE_COUNT[Math.min(4, typeCount)] || 0)
+        ? Number(varietyBonusByTypeCount[Math.min(maxVarietyTypeCount, typeCount)] || 0)
         : 0;
 
       const openCellCount = (Array.isArray(invention.pattern) ? invention.pattern : [])
@@ -1459,8 +1545,9 @@
       );
       const isComplete = openCellCount > 0 && filledCellCount >= openCellCount;
       invention.completionStatus = isComplete ? "complete" : "incomplete";
+      const completionBonusByInventionAndDay = ruleset.completionBonusByInventionAndDay || COMPLETION_BONUS_BY_INVENTION_AND_DAY;
       const completion = isComplete
-        ? Number(COMPLETION_BONUS_BY_INVENTION_AND_DAY[invention.id]?.[currentDay] || 0)
+        ? Number(completionBonusByInventionAndDay[invention.id]?.[currentDay] || 0)
         : 0;
 
       let unique = 0;
@@ -1758,7 +1845,8 @@
     updatePlayerJournalCompletion(playerId, completedJournals) {
       const state = this.gameStateService.getState();
       const players = Array.isArray(state.players) ? [...state.players] : [];
-      const safeCompleted = Math.max(0, Math.min(3, Number(completedJournals) || 0));
+      const config = this.getGameConfig(state);
+      const safeCompleted = Math.max(0, Math.min(config.journalCount, Number(completedJournals) || 0));
       const existingIndex = players.findIndex((player) => player.id === playerId);
 
       if (existingIndex >= 0) {
@@ -1781,6 +1869,7 @@
     }
 
     createDefaultPlayer(playerId) {
+      const config = this.getGameConfig();
       return {
         id: playerId,
         completedJournals: 0,
@@ -1789,13 +1878,13 @@
         toolScore: 0,
         unlockedTools: [],
         mechanisms: [],
-        inventions: this.getDefaultInventionCatalog().map((item) => this.createDefaultInvention(item.id)),
+        inventions: this.getDefaultInventionCatalog().map((item) => this.createDefaultInvention(item.id, config)),
         lastBuildAtTurn: null,
         lastBuildAtDay: null,
-        journals: Array.from({ length: JOURNAL_COUNT }, (_item, index) =>
+        journals: Array.from({ length: config.journalCount }, (_item, index) =>
           this.createDefaultJournal(index + 1),
         ),
-        workshops: Array.from({ length: WORKSHOP_COUNT }, (_item, index) =>
+        workshops: Array.from({ length: config.workshopCount }, (_item, index) =>
           this.createDefaultWorkshop(index + 1),
         ),
       };
@@ -1814,8 +1903,13 @@
       };
     }
 
-    createDefaultInvention(inventionRef) {
+    createDefaultInvention(inventionRef, gameConfigInput) {
       const template = this.resolveInventionTemplate(inventionRef);
+      const workshopIds = this.getWorkshopIds({ gameConfig: gameConfigInput || this.getGameConfig() });
+      const workshopTypeMarks = workshopIds.reduce((accumulator, workshopId) => {
+        accumulator[workshopId] = false;
+        return accumulator;
+      }, {});
       return {
         id: template.id,
         name: template.name,
@@ -1824,12 +1918,7 @@
         pattern: template.pattern.map((row) => String(row)),
         usedMechanismIds: [],
         placements: [],
-        workshopTypeMarks: {
-          W1: false,
-          W2: false,
-          W3: false,
-          W4: false,
-        },
+        workshopTypeMarks,
         scoring: {
           variety: 0,
           completion: 0,
@@ -1870,6 +1959,7 @@
         return state;
       }
       const catalog = this.getDefaultInventionCatalog();
+      const workshopIds = this.getWorkshopIds(state);
       let changed = false;
       const normalizedPlayers = players.map((player) => {
         const existing = Array.isArray(player.inventions) ? player.inventions : [];
@@ -1877,6 +1967,10 @@
         const normalizedInventions = catalog.map((template, index) => {
           const prior = byId.get(template.id) || existing[index] || {};
           const workshopMarks = prior.workshopTypeMarks || {};
+          const normalizedWorkshopMarks = workshopIds.reduce((accumulator, workshopId) => {
+            accumulator[workshopId] = Boolean(workshopMarks[workshopId]);
+            return accumulator;
+          }, {});
           const priorScoring = prior.scoring || {};
           return {
             id: template.id,
@@ -1897,12 +1991,7 @@
                     : [],
                 }))
               : [],
-            workshopTypeMarks: {
-              W1: Boolean(workshopMarks.W1),
-              W2: Boolean(workshopMarks.W2),
-              W3: Boolean(workshopMarks.W3),
-              W4: Boolean(workshopMarks.W4),
-            },
+            workshopTypeMarks: normalizedWorkshopMarks,
             scoring: {
               variety: Number(priorScoring.variety || 0),
               completion: Number(priorScoring.completion || 0),
@@ -2025,7 +2114,7 @@
 
     createDefaultWorkshop(workshopNumber) {
       const state = this.gameStateService.getState();
-      const layouts = getWorkshopLayoutsForSeed(state.rngSeed);
+      const layouts = this.getWorkshopLayoutsForSeed(state.rngSeed, state);
       const template = layouts[workshopNumber - 1] || layouts[0];
       const workshopId = "W" + String(workshopNumber);
       const cells = template.map((row) =>
@@ -2063,7 +2152,7 @@
     }
 
     createWorkshopIdeas(workshopId) {
-      const anchors = WORKSHOP_IDEA_ANCHORS[workshopId] || [];
+      const anchors = this.getRuleset().workshopIdeaAnchors?.[workshopId] || [];
       return anchors.map((anchor, index) => ({
         id: workshopId + "-I" + String(index + 1),
         row: Number(anchor.row),
@@ -2075,7 +2164,8 @@
     }
 
     getWorkshopIdeaAnchors(workshopId) {
-      return (WORKSHOP_IDEA_ANCHORS[workshopId] || []).map((anchor) => ({
+      const anchors = this.getRuleset().workshopIdeaAnchors?.[workshopId] || [];
+      return anchors.map((anchor) => ({
         row: Number(anchor.row),
         col: Number(anchor.col),
       }));

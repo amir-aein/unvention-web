@@ -5,6 +5,30 @@
     return JSON.parse(JSON.stringify(state));
   }
 
+  function normalizeCount(value, fallback, minimum, maximum) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+  }
+
+  function normalizeGameConfig(input) {
+    const candidate = input && typeof input === "object" ? input : {};
+    const defaults = {
+      journalCount: 3,
+      workshopCount: 4,
+    };
+    const ruleset = candidate.ruleset && typeof candidate.ruleset === "object"
+      ? JSON.parse(JSON.stringify(candidate.ruleset))
+      : null;
+    return {
+      journalCount: normalizeCount(candidate.journalCount, defaults.journalCount, 1, 6),
+      workshopCount: normalizeCount(candidate.workshopCount, defaults.workshopCount, 1, 4),
+      ruleset,
+    };
+  }
+
   class GameStateService {
     constructor(stateStorePort) {
       this.stateStorePort = stateStorePort;
@@ -56,6 +80,7 @@
         gameStatus: "active",
         gameStarted: false,
         activePlayerId: "P1",
+        gameConfig: normalizeGameConfig(null),
         players: [],
         rngSeed: "default-seed",
         rngState: 3288473048,
@@ -98,6 +123,7 @@
       if (typeof merged.rngSeed !== "string" || merged.rngSeed.length === 0) {
         merged.rngSeed = defaults.rngSeed;
       }
+      merged.gameConfig = normalizeGameConfig(merged.gameConfig);
       if (!Number.isInteger(merged.rngState)) {
         merged.rngState = defaults.rngState;
       }

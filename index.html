@@ -64,8 +64,8 @@
           <div class="mp-setup__buttons">
             <button id="waitroom-update-name" type="button">Update Name</button>
             <button id="waitroom-start-game" type="button">Start Game</button>
-            <button id="waitroom-cancel-room" type="button">Abandon Room</button>
-            <button id="waitroom-leave-room" type="button">Leave Room</button>
+            <button id="waitroom-cancel-room" type="button" class="button-destructive">Abandon Room</button>
+            <button id="waitroom-leave-room" type="button" class="button-destructive">Leave Room</button>
           </div>
           <p id="waitroom-status" class="mp-status-line">No room joined.</p>
           <table class="mp-room-directory__table">
@@ -138,11 +138,11 @@
             <p id="mp-turn-roll" class="mp-status-line">Turn: - | Roll: -</p>
             <div class="mp-room-panel__buttons">
               <button id="mp-start-game" type="button">Start Room Game</button>
-              <button id="mp-leave-room" type="button">Leave Room</button>
+              <button id="mp-leave-room" type="button" class="button-destructive">Leave Room</button>
             </div>
             <ul id="mp-player-list" class="mp-player-list"></ul>
           </div>
-          <button id="reset-game" type="button">Reset Game</button>
+          <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
         </section>
         <div class="log-header">
           <h2>Action Log</h2>
@@ -166,9 +166,12 @@
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
+    <script src="src/core/config/defaultRuleset.js"></script>
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
+    <script src="src/app/flows/soloFlow.js"></script>
+    <script src="src/app/flows/homeModeFlow.js"></script>
     <script src="src/app/bootstrap.js?v=20260214-8"></script>
   </body>
 </html>
