@@ -1170,6 +1170,10 @@
         const activeNumber = Number(selection?.activeNumber);
         const buildDraft = state.buildDrafts?.[activePlayerId];
         const isBuildPhase = state.phase === "build";
+        const buildCheatEnabled =
+          typeof roundEngineService.isBuildCheatEnabled === "function"
+            ? roundEngineService.isBuildCheatEnabled()
+            : false;
         const draftWorkshopId = buildDraft?.workshopId || "";
         const buildLockedOut = Boolean(draftWorkshopId) && draftWorkshopId !== workshop.id;
         const draftPath = Array.isArray(buildDraft?.path) ? buildDraft.path : [];
@@ -1224,7 +1228,7 @@
                 const canBuildSelect =
                   isBuildPhase &&
                   !builtThisTurn &&
-                  cell.circled &&
+                  (cell.circled || buildCheatEnabled) &&
                   !buildLockedOut &&
                   !inCommittedMechanism &&
                   (

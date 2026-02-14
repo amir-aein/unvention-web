@@ -127,7 +127,9 @@
       ],
     },
   ];
-  const FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING = true;
+  const IS_BROWSER_RUNTIME = typeof window !== "undefined";
+  const FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING = !IS_BROWSER_RUNTIME;
+  const FORCE_BUILD_CHEAT_FOR_TESTING = IS_BROWSER_RUNTIME;
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],
@@ -259,6 +261,10 @@
       return unlocked.some((item) => String(item.id) === String(tool.id));
     }
 
+    isBuildCheatEnabled() {
+      return FORCE_BUILD_CHEAT_FOR_TESTING;
+    }
+
     getActiveTools(playerId) {
       const state = this.gameStateService.getState();
       const player = this.findPlayer(state, playerId);
@@ -353,6 +359,9 @@
     }
 
     getBuildCost(playerId) {
+      if (this.isBuildCheatEnabled()) {
+        return 0;
+      }
       return this.hasTool(playerId, "T2") ? 1 : BUILD_WRENCH_COST;
     }
 
@@ -746,7 +755,7 @@
       if (!cell || cell.kind === "empty") {
         return { ok: false, reason: "out_of_bounds", state };
       }
-      if (!cell.circled) {
+      if (!cell.circled && !this.isBuildCheatEnabled()) {
         return { ok: false, reason: "uncircled_part", state };
       }
 
@@ -2613,6 +2622,9 @@
     }
 
     canBuildThisTurn(state, playerId) {
+      if (this.isBuildCheatEnabled()) {
+        return true;
+      }
       return this.getAvailableWrenches(playerId) >= this.getBuildCost(playerId);
     }
 
