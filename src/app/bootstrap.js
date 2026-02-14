@@ -5,8 +5,8 @@
   const MAX_UNDO_SNAPSHOTS = 20;
   const MAX_PERSISTED_UNDO_SNAPSHOTS = 6;
   const MAX_SNAPSHOT_LOG_ENTRIES = 80;
-  const ROLL_REVEAL_DELAY_MS = 0;
-  const ROLL_REVEAL_SLIDE_MS = 620;
+  const ROLL_SPINNER_MS = 1000;
+  const ROLL_RESULT_HOLD_MS = 160;
   const loggerService = container.loggerService;
   const gameStateService = container.gameStateService;
   const roundEngineService = container.roundEngineService;
@@ -44,7 +44,6 @@
   let rollPhaseAdvanceTimeout = null;
   let rollPhaseKey = "";
   let rollRevealVisibleKey = "";
-  let rollRevealAnimatedKey = "";
   let pendingToolUnlocks = [];
   let workspaceScrollBound = false;
   let renderRecoveryInProgress = false;
@@ -221,7 +220,7 @@
       return "Game completed.";
     }
     if (pendingToolUnlocks.length > 0) {
-      return "Review unlocked tool and confirm.";
+      return "";
     }
     const pendingJournalIdeas = typeof roundEngineService.getPendingJournalIdeaJournals === "function"
       ? roundEngineService.getPendingJournalIdeaJournals(activePlayerId)
@@ -338,16 +337,11 @@
     const rollKey = String(state.rollAndGroup?.rolledAtDay || "") + ":" + String(state.rollAndGroup?.rolledAtTurn || "");
     const waitingForReveal = state.phase === "roll_and_group" && rollRevealVisibleKey !== rollKey;
     if (waitingForReveal) {
-      container.innerHTML = "<span class='journal-muted'>Rolling and grouping outcomes...</span>";
+      container.innerHTML =
+        '<span class="round-roll-spinner" aria-hidden="true"></span>' +
+        "<span class='journal-muted'>Rolling and grouping outcomes...</span>";
       container.className = "round-roll-container round-roll-container--pending";
       return;
-    }
-    const shouldSlideIn =
-      state.phase === "roll_and_group" &&
-      rollRevealVisibleKey === rollKey &&
-      rollRevealAnimatedKey !== rollKey;
-    if (shouldSlideIn) {
-      rollRevealAnimatedKey = rollKey;
     }
     const diceChips = dice
       .map((value) => '<span class="round-roll-chip">' + String(value) + "</span>")
@@ -366,8 +360,7 @@
       '<span class="round-roll-chip">' +
       outcomeType.replaceAll("_", " ") +
       "</span>";
-    container.className =
-      "round-roll-container" + (shouldSlideIn ? " round-roll-container--slide-in" : "");
+    container.className = "round-roll-container";
   }
 
   function getActiveAnchorIdForPhase(phase) {
@@ -581,6 +574,10 @@
     if (phase === "journal" && pendingIdeas.length > 0) {
       return "inventions-panel";
     }
+    const journalSelection = state.journalSelections?.[activePlayerId];
+    if (phase === "journal" && !journalSelection?.selectedGroupKey) {
+      return "round-roll-panel";
+    }
     if (phase === "roll_and_group") {
       return "round-roll-panel";
     }
@@ -596,6 +593,28 @@
     return "";
   }
 
+  function scrollWorkspaceToSection(sectionId) {
+    const workspace = typeof document.querySelector === "function"
+      ? document.querySelector(".workspace")
+      : null;
+    const section = document.getElementById(sectionId);
+    if (!workspace || !section) {
+      return;
+    }
+    const header = workspace.querySelector(".workspace-head");
+    const headerHeight = header && typeof header.getBoundingClientRect === "function"
+      ? Math.ceil(header.getBoundingClientRect().height)
+      : 0;
+    const topPadding = 10;
+    const targetTop = Math.max(0, section.offsetTop - headerHeight - topPadding);
+    if (typeof workspace.scrollTo === "function") {
+      workspace.scrollTo({
+        top: targetTop,
+        behavior: "smooth",
+      });
+    }
+  }
+
   function maybeAutoScrollToPhaseSection(state) {
     const nextSectionId = getSectionIdForPhase(state.phase);
     if (!nextSectionId) {
@@ -605,11 +624,7 @@
       return;
     }
     lastAutoScrollTarget = nextSectionId;
-    const section = document.getElementById(nextSectionId);
-    if (!section || typeof section.scrollIntoView !== "function") {
-      return;
-    }
-    section.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+    scrollWorkspaceToSection(nextSectionId);
   }
 
   function renderPhaseControls(state) {
@@ -627,17 +642,20 @@
     }
 
     if (pendingToolUnlocks.length > 0) {
+      const title = pendingToolUnlocks.length === 1
+        ? String(pendingToolUnlocks[0]?.name || "Tool") + " unlocked"
+        : "Tools unlocked";
       const message = pendingToolUnlocks
         .map((tool) => {
-          const name = String(tool?.name || "new tool");
           const ability = String(tool?.abilityText || "").trim();
-          return ability ? ("You unlocked " + name + ". " + ability) : ("You unlocked " + name + ".");
+          return ability || "";
         })
+        .filter((text) => text.length > 0)
         .join(" ");
       controls.innerHTML =
-        "<div class='journal-control-row'><strong>Tool unlocked</strong></div>" +
-        "<div class='journal-control-row'><span class='journal-muted'>" +
-        message +
+        "<div class='journal-control-row'><strong>" + title + "</strong></div>" +
+        "<div class='journal-control-row journal-control-row--tool-unlock'><span>" +
+        (message || "No tool description available.") +
         "</span></div>" +
         '<div class="journal-control-row">' +
         '<button type="button" class="journal-chip journal-chip--group" data-action="confirm-tool-unlock">Confirm</button>' +
@@ -757,7 +775,19 @@
       const selection = state.workshopSelections?.[activePlayerId];
       const options = roundEngineService.getWorkshoppingOptions(activePlayerId);
       const selectedGroupKey = selection?.selectedGroupKey || "";
-      const selectedGroupLabel = options.find((option) => option.key === selectedGroupKey)?.label || selectedGroupKey;
+      const availableWrenches =
+        typeof roundEngineService.getAvailableWrenches === "function"
+          ? roundEngineService.getAvailableWrenches(activePlayerId)
+          : 0;
+      const canUseWrenchPart = availableWrenches > 0;
+      const wrenchPickPending = Boolean(selection?.wrenchPickPending);
+      const wrenchButton = canUseWrenchPart
+        ? (
+            '<button type="button" class="journal-chip' +
+            (wrenchPickPending ? " journal-chip--active" : "") +
+            '" data-action="workshop-use-wrench">Pay a 🔧 → ?</button>'
+          )
+        : "";
       const groupButtons = options.length > 0
         ? options
             .map(
@@ -804,12 +834,14 @@
       if (!selectedGroupKey) {
         html = '<div class="journal-control-row journal-control-row--prominent">' +
           groupButtons +
+          wrenchButton +
           '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
           "</div>";
       } else {
         html =
           '<div class="journal-control-row">' +
           numberButtons +
+          wrenchButton +
           '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
           "</div>";
       }
@@ -958,7 +990,6 @@
       rollPhaseAdvanceTimeout = null;
     }
     rollRevealVisibleKey = "";
-    rollRevealAnimatedKey = "";
     rollPhaseKey = "";
   }
 
@@ -987,7 +1018,6 @@
     }
     clearRollPhaseTimers();
     rollPhaseKey = key;
-    rollRevealAnimatedKey = "";
     rollPhaseRevealTimeout = globalScope.setTimeout(() => {
       const current = roundEngineService.getState();
       if (current.phase !== "roll_and_group") {
@@ -1007,8 +1037,8 @@
         } else {
           clearRollPhaseTimers();
         }
-      }, ROLL_REVEAL_SLIDE_MS);
-    }, ROLL_REVEAL_DELAY_MS);
+      }, ROLL_RESULT_HOLD_MS);
+    }, ROLL_SPINNER_MS);
   }
 
   function resolvePendingToolUnlockPrompt() {
@@ -1039,6 +1069,10 @@
         ...unlock,
         abilityText: String(toolById.get(String(unlock.id))?.abilityText || ""),
       }));
+      const currentWithUnlock = roundEngineService.getState();
+      if (currentWithUnlock.phase === "build") {
+        roundEngineService.advancePhase();
+      }
       lastAutoScrollTarget = "";
       return;
     }
@@ -1081,15 +1115,18 @@
     const activeTools = typeof roundEngineService.getActiveTools === "function"
       ? roundEngineService.getActiveTools(activePlayerId)
       : [];
-    const unlockedToolNames = activeTools.length > 0
-      ? activeTools.filter((tool) => tool.active).map((tool) => String(tool.name || tool.id || "")).join(", ")
-      : "none";
-    const unlockedToolDescriptions = activeTools.length > 0
-      ? activeTools
-          .filter((tool) => tool.active)
-          .map((tool) => String(tool.name || tool.id || "") + ": " + String(tool.abilityText || ""))
-          .join(" | ")
-      : "none";
+    const unlockedTools = activeTools.filter((tool) => tool.active);
+    const unlockedToolDetailsHtml = unlockedTools.length > 0
+      ? unlockedTools
+          .map((tool) =>
+            "<div><strong>" +
+            String(tool.name || tool.id || "") +
+            ":</strong> " +
+            String(tool.abilityText || "") +
+            "</div>",
+          )
+          .join("")
+      : "";
     const completedJournals = Number(player?.completedJournals || 0);
     const currentDay = String(state?.currentDay || "Friday");
     summary.innerHTML =
@@ -1099,8 +1136,7 @@
       "<div><strong>Total score:</strong> " + String(totalScore) + "</div>" +
       "<div><strong>Tool score:</strong> " + String(toolScore) + "</div>" +
       "<div><strong>Completed journals:</strong> " + String(completedJournals) + "/3</div>" +
-      "<div><strong>Tools unlocked:</strong> " + unlockedToolNames + "</div>" +
-      "<div><strong>Tool effects:</strong> " + unlockedToolDescriptions + "</div>" +
+      unlockedToolDetailsHtml +
       "</div>" +
       "<div class='summary-wrench-box'><strong>Wrenches</strong><span class='summary-wrenches'>" + wrenchTokens + wrenchOverflow + "</span></div>" +
       "</div>" +
@@ -1317,6 +1353,11 @@
                     cell.kind === "wild" ||
                     (cell.kind === "number" && allowedWorkshopValues.includes(Number(cell.value)))
                   );
+                const canWrenchPick =
+                  state.phase === "workshop" &&
+                  Boolean(selection?.wrenchPickPending) &&
+                  !cell.circled &&
+                  cell.kind !== "empty";
                 const isDraftWorkshop = isBuildPhase && draftWorkshopId === workshop.id;
                 const onDraftPath = isDraftWorkshop && Array.isArray(buildDraft?.path)
                   ? buildDraft.path.some((item) => item.row === rowIndex && item.col === columnIndex)
@@ -1341,16 +1382,16 @@
                   );
                 const isDisabled = isBuildPhase
                   ? (!canBuildSelect && !inCommittedMechanism)
-                  : (!cell.circled && !canMatchActive);
+                  : (!cell.circled && !canMatchActive && !canWrenchPick);
                 const shouldVisuallyDim = isBuildPhase
                   ? (!canBuildSelect && !cell.circled && !onDraftPath && !inCommittedMechanism)
-                  : (!cell.circled && !canMatchActive);
+                  : (!cell.circled && !canMatchActive && !canWrenchPick && !inCommittedMechanism);
                 return (
                   '<button type="button" class="workshop-cell' +
                   valueClass +
                   (onDraftPath ? " workshop-cell--path" : "") +
                   (inCommittedMechanism ? " workshop-cell--mechanism" : "") +
-                  (state.phase === "workshop" && canMatchActive ? " workshop-cell--clickable" : "") +
+                  (state.phase === "workshop" && (canMatchActive || canWrenchPick) ? " workshop-cell--clickable" : "") +
                   (canBuildSelect ? " workshop-cell--build-clickable" : "") +
                   (shouldVisuallyDim ? " workshop-cell--disabled" : "") +
                   (cell.circled ? " workshop-cell--circled" : "") +
@@ -2207,6 +2248,16 @@
       return;
     }
 
+    if (action === "workshop-use-wrench") {
+      runWithUndo(() => {
+        if (typeof roundEngineService.activateWorkshopWrenchPick === "function") {
+          roundEngineService.activateWorkshopWrenchPick(activePlayerId);
+        }
+      });
+      renderState();
+      return;
+    }
+
     if (action === "finish-building") {
       runWithUndo(() => {
         setBuildDecision("accepted");
@@ -2362,7 +2413,12 @@
     const state = roundEngineService.getState();
     runWithUndo(() => {
       if (state.phase === "workshop") {
-        roundEngineService.placeWorkshopPart(activePlayerId, workshopId, rowIndex, columnIndex);
+        const selection = state.workshopSelections?.[activePlayerId];
+        if (selection?.wrenchPickPending && typeof roundEngineService.placeWorkshopPartByWrench === "function") {
+          roundEngineService.placeWorkshopPartByWrench(activePlayerId, workshopId, rowIndex, columnIndex);
+        } else {
+          roundEngineService.placeWorkshopPart(activePlayerId, workshopId, rowIndex, columnIndex);
+        }
         maybeAutoAdvanceAfterWorkshopProgress();
         return;
       }
@@ -2509,6 +2565,9 @@
     if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
       return;
     }
+    if (shouldDeferActionsForUnlockPrompt()) {
+      return;
+    }
     const cell = target.closest(".invention-pattern-cell");
     if (!cell) {
       return;
@@ -2553,12 +2612,8 @@
       if (!href.startsWith("#")) {
         return;
       }
-      const section = document.getElementById(href.slice(1));
-      if (!section || typeof section.scrollIntoView !== "function") {
-        return;
-      }
       event.preventDefault();
-      section.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+      scrollWorkspaceToSection(href.slice(1));
     });
   }
   const workspace = typeof document.querySelector === "function"

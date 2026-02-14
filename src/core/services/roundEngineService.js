@@ -588,6 +588,7 @@
         selectedWorkshopId: existing.selectedWorkshopId || null,
         workshopLocked: !this.hasTool(playerId, "T4") && Boolean(existing.selectedWorkshopId),
         placementsThisTurn: existing.placementsThisTurn || 0,
+        wrenchPickPending: false,
       };
       const updated = this.gameStateService.update({ workshopSelections: selections });
       this.loggerService.logEvent("info", "Player X selected workshopping group " + selected.values.join(", "), {
@@ -624,6 +625,89 @@
       };
       selections[playerId] = playerSelection;
       return this.gameStateService.update({ workshopSelections: selections });
+    }
+
+    activateWorkshopWrenchPick(playerId) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "workshop") {
+        return state;
+      }
+      const available = this.getAvailableWrenches(playerId);
+      if (available < 1) {
+        this.loggerService.logEvent("warn", "Cannot use wrench for workshop part (no wrenches available)", {
+          playerId,
+        });
+        return state;
+      }
+      const selections = { ...(state.workshopSelections || {}) };
+      const existing = selections[playerId] || {};
+      selections[playerId] = {
+        ...existing,
+        wrenchPickPending: true,
+      };
+      return this.gameStateService.update({ workshopSelections: selections });
+    }
+
+    placeWorkshopPartByWrench(playerId, workshopId, rowIndex, columnIndex) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "workshop") {
+        return { ok: false, reason: "invalid_phase", state };
+      }
+      const available = this.getAvailableWrenches(playerId);
+      if (available < 1) {
+        return { ok: false, reason: "insufficient_wrenches", state };
+      }
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return { ok: false, reason: "missing_player", state };
+      }
+      const workshop = player.workshops.find((item) => item.id === workshopId);
+      if (!workshop) {
+        return { ok: false, reason: "invalid_workshop", state };
+      }
+      const row = workshop.cells?.[rowIndex];
+      const cell = row?.[columnIndex];
+      if (!cell || cell.kind === "empty") {
+        return { ok: false, reason: "out_of_bounds", state };
+      }
+      if (cell.circled) {
+        return { ok: false, reason: "already_circled", state };
+      }
+
+      workshop.cells[rowIndex][columnIndex] = { ...cell, circled: true };
+      workshop.partsByNumber = this.countWorkshopPartsByNumber(workshop.cells);
+      workshop.lastWorkedAtTurn = state.turnNumber;
+      workshop.lastWorkedAtDay = state.currentDay;
+      player.spentWrenches = Number(player.spentWrenches || 0) + 1;
+
+      const updatedPlayers = state.players.map((item) => (item.id === playerId ? player : item));
+      const selections = { ...(state.workshopSelections || {}) };
+      const existing = selections[playerId] || {};
+      selections[playerId] = {
+        ...existing,
+        wrenchPickPending: false,
+      };
+      const updated = this.gameStateService.update({
+        players: updatedPlayers,
+        workshopSelections: selections,
+      });
+      this.loggerService.logEvent(
+        "info",
+        "Player X used 1 wrench to add part in " +
+          String(workshop.id) +
+          " at R" +
+          String(rowIndex + 1) +
+          "C" +
+          String(columnIndex + 1),
+        {
+          playerId,
+          workshopId,
+          rowIndex,
+          columnIndex,
+          wrenchCost: 1,
+        },
+      );
+      return { ok: true, reason: null, state: updated };
     }
 
     placeWorkshopPart(playerId, workshopId, rowIndex, columnIndex) {
@@ -705,6 +789,7 @@
         workshopLocked: !this.hasTool(playerId, "T4"),
         remainingNumbers: this.removeSingleValue(remainingNumbers, consumeValue),
         placementsThisTurn: Number(selection.placementsThisTurn || 0) + 1,
+        wrenchPickPending: false,
       };
       selections[playerId].activeNumber = selections[playerId].remainingNumbers[0] || null;
       selections[playerId].activePick = {
@@ -907,7 +992,12 @@
           },
         );
       });
-      return { ok: true, reason: null, state: updated };
+      return {
+        ok: true,
+        reason: null,
+        state: updated,
+        unlockedTools: toolUnlockResult.unlocked,
+      };
     }
 
     unlockToolsForMechanism(playerId, player, mechanism, state) {

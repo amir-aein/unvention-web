@@ -252,8 +252,14 @@ body {
   opacity: 0.85;
 }
 
-.round-roll-container--slide-in {
-  animation: round-roll-slide-in 620ms cubic-bezier(0.16, 1, 0.3, 1);
+.round-roll-spinner {
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  display: inline-block;
+  animation: round-roll-spin 700ms linear infinite;
 }
 
 .round-roll-chip {
@@ -1496,14 +1502,14 @@ button:hover {
   color: #94a3b8;
 }
 
-@keyframes round-roll-slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(-72px);
-  }
+.journal-controls--header .journal-control-row--tool-unlock span {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+@keyframes round-roll-spin {
   to {
-    opacity: 1;
-    transform: translateX(0);
+    transform: rotate(360deg);
   }
 }
 
@@ -1513,6 +1519,10 @@ button:hover {
 #inventions-panel,
 #tools-panel {
   scroll-margin-top: 210px;
+}
+
+#round-roll-panel {
+  scroll-margin-top: 182px;
 }
 
 .journal-roll-banner {
