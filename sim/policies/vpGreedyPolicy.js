@@ -308,12 +308,12 @@ function playJournalPhase(engine, playerId, trace) {
     }
 
     placed += 1;
-    trace.push({ phase: 'journal', action: 'placeJournalNumber', detail: action });
+    trace.push({ playerId, phase: 'journal', action: 'placeJournalNumber', detail: action });
   }
 
   const assigned = assignPendingIdeas(engine, playerId);
   if (assigned > 0) {
-    trace.push({ phase: 'journal', action: 'assignJournalIdea', count: assigned });
+    trace.push({ playerId, phase: 'journal', action: 'assignJournalIdea', count: assigned });
   }
 
   engine.advancePhase();
@@ -475,7 +475,7 @@ function playWorkshopPhase(engine, playerId, trace) {
     if (!result.ok) {
       break;
     }
-    trace.push({ phase: 'workshop', action: 'placeWorkshopPart', detail: action });
+    trace.push({ playerId, phase: 'workshop', action: 'placeWorkshopPart', detail: action });
   }
 
   engine.advancePhase();
@@ -577,6 +577,7 @@ function playBuildPhase(engine, playerId, trace) {
       const result = engine.finishBuildingMechanism(playerId);
       if (result.ok) {
         trace.push({
+          playerId,
           phase: 'build',
           action: 'finishBuildingMechanism',
           workshopId: component.workshopId,
@@ -693,7 +694,7 @@ function playInventPhase(engine, playerId, trace) {
 
     const result = engine.placeMechanismInInvention(playerId, action.inventionId, action.anchorRow, action.anchorCol);
     if (result.ok) {
-      trace.push({ phase: 'invent', action: 'placeMechanismInInvention', detail: action });
+      trace.push({ playerId, phase: 'invent', action: 'placeMechanismInInvention', detail: action });
     }
   }
 
@@ -725,10 +726,10 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
         journalSelections: nextJournalSelections,
         workshopPhaseContext: nextWorkshopContext,
       });
-      trace.push({ phase: 'journal', action: 'fallback_forced_phase_jump' });
+      trace.push({ playerId, phase: 'journal', action: 'fallback_forced_phase_jump' });
       return;
     }
-    trace.push({ phase: 'journal', action: 'fallback_force_progress' });
+    trace.push({ playerId, phase: 'journal', action: 'fallback_force_progress' });
     return;
   }
 
@@ -744,10 +745,10 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
         phase: 'build',
         workshopSelections: nextWorkshopSelections,
       });
-      trace.push({ phase: 'workshop', action: 'fallback_forced_phase_jump' });
+      trace.push({ playerId, phase: 'workshop', action: 'fallback_forced_phase_jump' });
       return;
     }
-    trace.push({ phase: 'workshop', action: 'fallback_force_progress' });
+    trace.push({ playerId, phase: 'workshop', action: 'fallback_force_progress' });
     return;
   }
 
@@ -756,7 +757,9 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
 
 function playStep(engine, options = {}) {
   const playerId = options.playerId || 'P1';
-  const trace = Array.isArray(options.trace) ? options.trace : [];
+  const trace = options.trace && typeof options.trace.push === 'function'
+    ? options.trace
+    : { push() {} };
   const state = engine.getState();
 
   if (state.gameStatus === 'completed') {
@@ -768,7 +771,7 @@ function playStep(engine, options = {}) {
 
   if (phase === 'roll_and_group') {
     engine.advancePhase();
-    trace.push({ phase: 'roll_and_group', action: 'advancePhase' });
+    trace.push({ playerId, phase: 'roll_and_group', action: 'advancePhase' });
   } else if (phase === 'journal') {
     playJournalPhase(engine, playerId, trace);
   } else if (phase === 'workshop') {

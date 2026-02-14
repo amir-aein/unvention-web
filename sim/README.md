@@ -28,7 +28,13 @@ Available flags:
 Default output directory: `sim/output/latest`
 
 - `summary.csv`: one row per game for fast statistical analysis
-- `summary.json`: same data in JSON format
+- `summary.json`: per-game deep summary including:
+  - winner ids + winner margin
+  - per-player invention score breakdowns
+  - mechanism size histograms
+  - tool unlock details
+  - phase/action metrics and fallback counts
+  - warning/block reason counts from engine logs
 - `games.ndjson`: one JSON object per game
 - `traces.ndjson`: sampled per-action traces (only when sampled traces exist)
 

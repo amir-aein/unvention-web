@@ -128,7 +128,6 @@
     },
   ];
   const IS_BROWSER_RUNTIME = typeof window !== "undefined";
-  const FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING = !IS_BROWSER_RUNTIME;
   const FORCE_BUILD_CHEAT_FOR_TESTING = IS_BROWSER_RUNTIME;
   const WORKSHOP_LAYOUTS = [
     [
@@ -253,9 +252,6 @@
         null;
       if (!tool) {
         return false;
-      }
-      if (FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING) {
-        return true;
       }
       const unlocked = Array.isArray(player.unlockedTools) ? player.unlockedTools : [];
       return unlocked.some((item) => String(item.id) === String(tool.id));

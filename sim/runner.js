@@ -66,23 +66,15 @@ function toCsvRow(values) {
     .join(',');
 }
 
-function createPlayerIds(count) {
-  return Array.from({ length: count }, (_item, index) => 'P' + String(index + 1));
+function incrementCount(target, key, amount = 1) {
+  if (!target[key]) {
+    target[key] = 0;
+  }
+  target[key] += amount;
 }
 
-function summarizePlayers(state) {
-  const players = Array.isArray(state.players) ? state.players : [];
-  return players.map((player) => ({
-    id: player.id,
-    totalScore: Number(player.totalScore || 0),
-    toolScore: Number(player.toolScore || 0),
-    completedJournals: Number(player.completedJournals || 0),
-    mechanismsBuilt: Array.isArray(player.mechanisms) ? player.mechanisms.length : 0,
-    placements: (Array.isArray(player.inventions) ? player.inventions : []).reduce(
-      (sum, invention) => sum + (Array.isArray(invention.placements) ? invention.placements.length : 0),
-      0,
-    ),
-  }));
+function createPlayerIds(count) {
+  return Array.from({ length: count }, (_item, index) => 'P' + String(index + 1));
 }
 
 function getActivePlayerId(state) {
@@ -95,35 +87,211 @@ function getActivePlayerId(state) {
   return ids[0] || 'P1';
 }
 
+function getWinnerDetails(players) {
+  const list = Array.isArray(players) ? players : [];
+  const scores = list.map((player) => Number(player.totalScore || 0));
+  const sorted = [...scores].sort((a, b) => b - a);
+  const top = sorted[0] ?? 0;
+  const second = sorted[1] ?? 0;
+  return {
+    winnerIds: list
+      .filter((player) => Number(player.totalScore || 0) === top)
+      .map((player) => player.id),
+    winnerMargin: top - second,
+    topScore: top,
+  };
+}
+
+function summarizePlayers(state) {
+  const players = Array.isArray(state.players) ? state.players : [];
+  return players.map((player) => {
+    const mechanisms = Array.isArray(player.mechanisms) ? player.mechanisms : [];
+    const mechanismSizes = mechanisms.map((mechanism) =>
+      Array.isArray(mechanism.path) ? mechanism.path.length : 0,
+    );
+
+    const inventions = (Array.isArray(player.inventions) ? player.inventions : []).map((invention) => ({
+      id: invention.id,
+      completionStatus: invention.completionStatus,
+      presentedDay: invention.presentedDay,
+      placements: Array.isArray(invention.placements) ? invention.placements.length : 0,
+      score: Number(invention.score || invention.scoring?.total || 0),
+      scoring: {
+        variety: Number(invention.scoring?.variety || 0),
+        completion: Number(invention.scoring?.completion || 0),
+        unique: Number(invention.scoring?.unique || 0),
+        total: Number(invention.scoring?.total || 0),
+      },
+      uniqueIdeasMarked: Number(invention.uniqueIdeasMarked || invention.multiplier || 1),
+      workshopTypeMarks: {
+        W1: Boolean(invention.workshopTypeMarks?.W1),
+        W2: Boolean(invention.workshopTypeMarks?.W2),
+        W3: Boolean(invention.workshopTypeMarks?.W3),
+        W4: Boolean(invention.workshopTypeMarks?.W4),
+      },
+    }));
+
+    const toolUnlocks = (Array.isArray(player.unlockedTools) ? player.unlockedTools : []).map((tool) => ({
+      id: String(tool.id || ''),
+      name: String(tool.name || ''),
+      unlockTier: String(tool.unlockTier || ''),
+      pointsAwarded: Number(tool.pointsAwarded || 0),
+      unlockedAtTurn: Number(tool.unlockedAtTurn || 0),
+      unlockedAtDay: String(tool.unlockedAtDay || ''),
+      mechanismId: String(tool.mechanismId || ''),
+    }));
+
+    return {
+      id: player.id,
+      totalScore: Number(player.totalScore || 0),
+      toolScore: Number(player.toolScore || 0),
+      completedJournals: Number(player.completedJournals || 0),
+      mechanismsBuilt: mechanisms.length,
+      mechanismSizeHistogram: {
+        size2: mechanismSizes.filter((size) => size === 2).length,
+        size3to4: mechanismSizes.filter((size) => size >= 3 && size <= 4).length,
+        size5plus: mechanismSizes.filter((size) => size >= 5).length,
+      },
+      mechanismSizes,
+      placements: inventions.reduce((sum, invention) => sum + invention.placements, 0),
+      inventions,
+      toolUnlocks,
+      toolUnlockCount: toolUnlocks.length,
+    };
+  });
+}
+
+function analyzeLogs(entries) {
+  const logs = Array.isArray(entries) ? entries : [];
+  const warningMessageCounts = {};
+  const blockedReasonCounts = {};
+  const toolUnlockEvents = [];
+
+  logs.forEach((entry) => {
+    const level = String(entry?.level || '').toLowerCase();
+    const message = String(entry?.message || '');
+    const context = entry?.context && typeof entry.context === 'object' ? entry.context : {};
+
+    if (level === 'warn') {
+      incrementCount(warningMessageCounts, message || 'unknown_warning');
+      if (context.reason) {
+        incrementCount(blockedReasonCounts, String(context.reason));
+      }
+    }
+
+    if (context.toolId) {
+      toolUnlockEvents.push({
+        toolId: String(context.toolId),
+        pointsAwarded: Number(context.pointsAwarded || 0),
+        unlockTier: String(context.unlockTier || ''),
+        mechanismId: String(context.mechanismId || ''),
+        playerId: String(context.playerId || ''),
+      });
+    }
+  });
+
+  return {
+    warningMessageCounts,
+    blockedReasonCounts,
+    toolUnlockEvents,
+  };
+}
+
+function createMetricsCollector() {
+  return {
+    totalActionEvents: 0,
+    phaseActionCounts: {},
+    playerActionCounts: {},
+    fallbackEvents: 0,
+    forcedPhaseJumps: 0,
+    phaseTransitionCounts: {},
+    activePlayerTransitionCounts: {},
+    stalledSteps: 0,
+  };
+}
+
+function recordActionMetrics(metrics, event) {
+  if (!metrics || !event || typeof event !== 'object') {
+    return;
+  }
+  metrics.totalActionEvents += 1;
+  const phase = String(event.phase || 'unknown');
+  const action = String(event.action || 'unknown');
+  const playerId = String(event.playerId || 'unknown');
+
+  incrementCount(metrics.phaseActionCounts, phase + ':' + action);
+  incrementCount(metrics.playerActionCounts, playerId + ':' + phase + ':' + action);
+
+  if (action.includes('fallback')) {
+    metrics.fallbackEvents += 1;
+  }
+  if (action.includes('forced_phase_jump')) {
+    metrics.forcedPhaseJumps += 1;
+  }
+}
+
 function runGame(gameIndex, config) {
   const playerIds = createPlayerIds(config.players);
   const seed = config.seedBase + '-' + String(gameIndex + 1);
-  const harness = createConfiguredHarness({
-    playerIds,
-    seed,
-  });
+  const harness = createConfiguredHarness({ playerIds, seed });
 
   const trace = [];
   const keepTrace = Math.random() < config.traceRate;
+  const metrics = createMetricsCollector();
   let stalledCount = 0;
+
+  const traceSink = {
+    push(event) {
+      const normalized = event && typeof event === 'object' ? { ...event } : { action: 'unknown' };
+      recordActionMetrics(metrics, normalized);
+      if (keepTrace) {
+        trace.push(normalized);
+      }
+    },
+  };
 
   for (let step = 0; step < config.maxSteps; step += 1) {
     const beforeState = harness.getState();
     const before = JSON.stringify(beforeState);
     const actingPlayerId = getActivePlayerId(beforeState);
+
     policy.playStep(harness.engine, {
       playerId: actingPlayerId,
-      trace: keepTrace ? trace : [],
+      trace: traceSink,
     });
+
     const afterState = harness.getState();
     const after = JSON.stringify(afterState);
+
+    incrementCount(metrics.phaseTransitionCounts, String(beforeState.phase) + '->' + String(afterState.phase));
+    incrementCount(
+      metrics.activePlayerTransitionCounts,
+      String(getActivePlayerId(beforeState)) + '->' + String(getActivePlayerId(afterState)),
+    );
+
+    if (keepTrace) {
+      trace.push({
+        type: 'step',
+        step,
+        actingPlayerId,
+        beforePhase: beforeState.phase,
+        afterPhase: afterState.phase,
+        beforeDay: beforeState.currentDay,
+        afterDay: afterState.currentDay,
+        beforeTurn: beforeState.turnNumber,
+        afterTurn: afterState.turnNumber,
+        stateChanged: before !== after,
+      });
+    }
 
     if (afterState.gameStatus === 'completed') {
       return {
         gameId: gameIndex + 1,
         seed,
         state: afterState,
+        logs: harness.logs,
         trace: keepTrace ? trace : null,
+        metrics,
         didComplete: true,
         warning: null,
       };
@@ -131,6 +299,7 @@ function runGame(gameIndex, config) {
 
     if (before === after) {
       stalledCount += 1;
+      metrics.stalledSteps += 1;
     } else {
       stalledCount = 0;
     }
@@ -140,7 +309,9 @@ function runGame(gameIndex, config) {
         gameId: gameIndex + 1,
         seed,
         state: afterState,
+        logs: harness.logs,
         trace: keepTrace ? trace : null,
+        metrics,
         didComplete: false,
         warning: 'stalled_state',
       };
@@ -151,7 +322,9 @@ function runGame(gameIndex, config) {
     gameId: gameIndex + 1,
     seed,
     state: harness.getState(),
+    logs: harness.logs,
     trace: keepTrace ? trace : null,
+    metrics,
     didComplete: false,
     warning: 'max_steps_reached',
   };
@@ -171,29 +344,31 @@ function writeOutputs(config, summaries, traces) {
   const csvHeader = [
     'game_id',
     'seed',
+    'player_count',
     'completed',
     'warning',
     'final_day',
     'turn_number',
     'winner_ids',
+    'winner_margin',
     'scores_json',
+    'fallback_events',
+    'forced_phase_jumps',
+    'tool_unlock_events',
+    'blocked_reasons_json',
     'p1_total_score',
     'p1_tool_score',
     'p1_completed_journals',
     'p1_mechanisms_built',
     'p1_placements',
   ];
+
   const csvRows = [toCsvRow(csvHeader)];
   summaries.forEach((summary) => {
-    const players = Array.isArray(summary.players) ? summary.players : [];
-    const maxScore = players.reduce((max, player) => Math.max(max, Number(player.totalScore || 0)), Number.NEGATIVE_INFINITY);
-    const winners = players
-      .filter((player) => Number(player.totalScore || 0) === maxScore)
-      .map((player) => player.id)
-      .join('|');
     const scoresJson = JSON.stringify(
-      players.map((player) => ({ id: player.id, totalScore: player.totalScore })),
+      summary.players.map((player) => ({ id: player.id, totalScore: player.totalScore })),
     );
+
     const p1 = summary.players.find((player) => player.id === 'P1') || {
       totalScore: 0,
       toolScore: 0,
@@ -201,16 +376,23 @@ function writeOutputs(config, summaries, traces) {
       mechanismsBuilt: 0,
       placements: 0,
     };
+
     csvRows.push(
       toCsvRow([
         summary.gameId,
         summary.seed,
+        summary.playerCount,
         summary.completed,
         summary.warning || '',
         summary.currentDay,
         summary.turnNumber,
-        winners,
+        summary.winnerIds.join('|'),
+        summary.winnerMargin,
         scoresJson,
+        summary.metrics.fallbackEvents,
+        summary.metrics.forcedPhaseJumps,
+        summary.logInsights.toolUnlockEvents.length,
+        JSON.stringify(summary.logInsights.blockedReasonCounts),
         p1.totalScore,
         p1.toolScore,
         p1.completedJournals,
@@ -219,6 +401,7 @@ function writeOutputs(config, summaries, traces) {
       ]),
     );
   });
+
   fs.writeFileSync(summaryCsvPath, csvRows.join('\n') + '\n');
 
   const ndjsonLines = summaries.map((summary) => JSON.stringify(summary)).join('\n');
@@ -246,6 +429,9 @@ function main() {
   for (let gameIndex = 0; gameIndex < config.runs; gameIndex += 1) {
     const result = runGame(gameIndex, config);
     const state = result.state;
+    const players = summarizePlayers(state);
+    const winner = getWinnerDetails(players);
+    const logInsights = analyzeLogs(result.logs);
 
     const summary = {
       gameId: result.gameId,
@@ -257,8 +443,14 @@ function main() {
       currentDay: state.currentDay,
       turnNumber: state.turnNumber,
       gameStatus: state.gameStatus,
-      players: summarizePlayers(state),
+      activePlayerId: state.activePlayerId || null,
+      winnerIds: winner.winnerIds,
+      winnerMargin: winner.winnerMargin,
+      metrics: result.metrics,
+      logInsights,
+      players,
     };
+
     summaries.push(summary);
 
     if (result.trace && result.trace.length > 0) {
@@ -275,11 +467,10 @@ function main() {
   const completed = summaries.filter((item) => item.completed).length;
   const meanScore =
     summaries.reduce((sum, item) => {
-      const total = (Array.isArray(item.players) ? item.players : [])
-        .reduce((playerSum, player) => playerSum + Number(player.totalScore || 0), 0);
-      const count = Math.max(1, (Array.isArray(item.players) ? item.players : []).length);
+      const total = item.players.reduce((playerSum, player) => playerSum + Number(player.totalScore || 0), 0);
+      const count = Math.max(1, item.players.length);
       return sum + total / count;
-    }, 0) / summaries.length;
+    }, 0) / Math.max(1, summaries.length);
 
   console.log('Simulation complete');
   console.log('Policy: ' + policy.name);
