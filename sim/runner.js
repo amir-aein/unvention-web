@@ -13,6 +13,9 @@ function parseArgs(argv) {
     traceRate: 0.1,
     maxSteps: 400,
     outputDir: path.resolve(__dirname, 'output', 'latest'),
+    personas: Array.isArray(policy.personaNames) && policy.personaNames.length > 0
+      ? [...policy.personaNames]
+      : ['adaptive_opportunist'],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +52,17 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (current === '--personas' && next) {
+      const personaList = String(next)
+        .split(',')
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+      if (personaList.length > 0) {
+        parsed.personas = personaList;
+      }
+      index += 1;
+      continue;
+    }
   }
 
   return parsed;
@@ -75,6 +89,19 @@ function incrementCount(target, key, amount = 1) {
 
 function createPlayerIds(count) {
   return Array.from({ length: count }, (_item, index) => 'P' + String(index + 1));
+}
+
+function assignPersonas(playerIds, personaPool, gameIndex) {
+  const ids = Array.isArray(playerIds) ? playerIds : [];
+  const personas =
+    Array.isArray(personaPool) && personaPool.length > 0
+      ? personaPool
+      : ['adaptive_opportunist'];
+  const assignments = {};
+  ids.forEach((playerId, index) => {
+    assignments[playerId] = personas[(gameIndex + index) % personas.length];
+  });
+  return assignments;
 }
 
 function getActivePlayerId(state) {
@@ -232,6 +259,7 @@ function recordActionMetrics(metrics, event) {
 
 function runGame(gameIndex, config) {
   const playerIds = createPlayerIds(config.players);
+  const personaAssignments = assignPersonas(playerIds, config.personas, gameIndex);
   const seed = config.seedBase + '-' + String(gameIndex + 1);
   const harness = createConfiguredHarness({ playerIds, seed });
 
@@ -257,6 +285,7 @@ function runGame(gameIndex, config) {
 
     policy.playStep(harness.engine, {
       playerId: actingPlayerId,
+      persona: personaAssignments[actingPlayerId],
       trace: traceSink,
     });
 
@@ -292,6 +321,7 @@ function runGame(gameIndex, config) {
         logs: harness.logs,
         trace: keepTrace ? trace : null,
         metrics,
+        personaAssignments,
         didComplete: true,
         warning: null,
       };
@@ -312,6 +342,7 @@ function runGame(gameIndex, config) {
         logs: harness.logs,
         trace: keepTrace ? trace : null,
         metrics,
+        personaAssignments,
         didComplete: false,
         warning: 'stalled_state',
       };
@@ -325,6 +356,7 @@ function runGame(gameIndex, config) {
     logs: harness.logs,
     trace: keepTrace ? trace : null,
     metrics,
+    personaAssignments,
     didComplete: false,
     warning: 'max_steps_reached',
   };
@@ -351,6 +383,7 @@ function writeOutputs(config, summaries, traces) {
     'turn_number',
     'winner_ids',
     'winner_margin',
+    'persona_assignments_json',
     'scores_json',
     'fallback_events',
     'forced_phase_jumps',
@@ -388,6 +421,7 @@ function writeOutputs(config, summaries, traces) {
         summary.turnNumber,
         summary.winnerIds.join('|'),
         summary.winnerMargin,
+        JSON.stringify(summary.personaAssignments || {}),
         scoresJson,
         summary.metrics.fallbackEvents,
         summary.metrics.forcedPhaseJumps,
@@ -446,6 +480,7 @@ function main() {
       activePlayerId: state.activePlayerId || null,
       winnerIds: winner.winnerIds,
       winnerMargin: winner.winnerMargin,
+      personaAssignments: result.personaAssignments || {},
       metrics: result.metrics,
       logInsights,
       players,
@@ -458,6 +493,7 @@ function main() {
         gameId: result.gameId,
         seed: result.seed,
         policy: policy.name,
+        personaAssignments: result.personaAssignments || {},
         actions: result.trace,
       });
     }
@@ -475,6 +511,7 @@ function main() {
   console.log('Simulation complete');
   console.log('Policy: ' + policy.name);
   console.log('Runs: ' + summaries.length);
+  console.log('Personas: ' + (config.personas || []).join(', '));
   console.log('Completed: ' + completed + '/' + summaries.length);
   console.log('Mean player total score: ' + meanScore.toFixed(2));
   console.log('Summary CSV: ' + outputs.summaryCsvPath);

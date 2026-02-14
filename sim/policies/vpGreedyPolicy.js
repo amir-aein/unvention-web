@@ -1,5 +1,87 @@
+const PERSONA_NAMES = [
+  'tool_investor',
+  'journal_optimizer',
+  'invention_sprinter',
+  'adaptive_opportunist',
+];
+
+const BASE_PROFILE = {
+  journalValueWeight: 1,
+  journalCompletionWeight: 1,
+  journalGroupFlexWeight: 1,
+  ideaTargetPlacementWeight: 1,
+  ideaTargetMultiplierWeight: 1,
+  workshopIdeaWeight: 1,
+  workshopOpenWeight: 1,
+  buildSizeWeight: 1,
+  buildToolTargetWeight: 1,
+  inventCompletionWeight: 1,
+  inventVarietyWeight: 1,
+  inventIdeaWeight: 1,
+};
+
+const PERSONA_OVERRIDES = {
+  tool_investor: {
+    buildSizeWeight: 1.15,
+    buildToolTargetWeight: 2.2,
+    workshopIdeaWeight: 1.2,
+    inventCompletionWeight: 0.9,
+    inventVarietyWeight: 1.1,
+    inventIdeaWeight: 1.2,
+  },
+  journal_optimizer: {
+    journalValueWeight: 1.1,
+    journalCompletionWeight: 1.8,
+    journalGroupFlexWeight: 1.2,
+    ideaTargetPlacementWeight: 1.2,
+    ideaTargetMultiplierWeight: 1.2,
+    workshopIdeaWeight: 1.1,
+    buildSizeWeight: 0.9,
+    buildToolTargetWeight: 0.9,
+    inventCompletionWeight: 0.85,
+  },
+  invention_sprinter: {
+    journalCompletionWeight: 0.8,
+    workshopOpenWeight: 1.1,
+    buildSizeWeight: 1.1,
+    buildToolTargetWeight: 1.3,
+    inventCompletionWeight: 1.9,
+    inventVarietyWeight: 1.5,
+    inventIdeaWeight: 1.4,
+  },
+};
+
 function getPlayer(state, playerId) {
   return (Array.isArray(state.players) ? state.players : []).find((player) => player.id === playerId) || null;
+}
+
+function resolvePersonaProfile(personaName, state, playerId) {
+  const normalized = String(personaName || 'adaptive_opportunist').toLowerCase();
+  if (normalized === 'adaptive_opportunist') {
+    const players = Array.isArray(state?.players) ? state.players : [];
+    const me = players.find((player) => player.id === playerId);
+    const myScore = Number(me?.totalScore || 0);
+    const avgScore = players.length > 0
+      ? players.reduce((sum, player) => sum + Number(player.totalScore || 0), 0) / players.length
+      : 0;
+    const gap = myScore - avgScore;
+    if (gap <= -6) {
+      return { ...BASE_PROFILE, ...PERSONA_OVERRIDES.invention_sprinter };
+    }
+    if (gap >= 6) {
+      return { ...BASE_PROFILE, ...PERSONA_OVERRIDES.journal_optimizer };
+    }
+    return {
+      ...BASE_PROFILE,
+      ...PERSONA_OVERRIDES.tool_investor,
+      inventCompletionWeight: 1.25,
+      buildToolTargetWeight: 1.45,
+      buildSizeWeight: 1.05,
+    };
+  }
+
+  const override = PERSONA_OVERRIDES[normalized] || {};
+  return { ...BASE_PROFILE, ...override };
 }
 
 function countNulls(values) {
@@ -33,7 +115,7 @@ function getOpenWorkshopCells(workshop) {
   return cells;
 }
 
-function estimateJournalPlacementValue(journal, rowIndex, colIndex, value) {
+function estimateJournalPlacementValue(journal, rowIndex, colIndex, value, profile) {
   const grid = Array.isArray(journal.grid) ? journal.grid : [];
   const row = Array.isArray(grid[rowIndex]) ? grid[rowIndex] : [];
   const col = grid.map((item) => (Array.isArray(item) ? item[colIndex] : null));
@@ -41,25 +123,25 @@ function estimateJournalPlacementValue(journal, rowIndex, colIndex, value) {
   const rowNullsBefore = countNulls(row);
   const colNullsBefore = countNulls(col);
   const allNullsBefore = grid.reduce((sum, currentRow) => sum + countNulls(currentRow), 0);
-  let score = Number(value || 0);
+  let score = Number(value || 0) * profile.journalValueWeight;
 
   if (rowNullsBefore === 1) {
-    score += 7;
+    score += 7 * profile.journalCompletionWeight;
   }
   if (colNullsBefore === 1) {
-    score += 7;
+    score += 7 * profile.journalCompletionWeight;
   }
   if (allNullsBefore === 1) {
-    score += 12;
+    score += 12 * profile.journalCompletionWeight;
   }
   if (journal.completionStatus !== 'complete' && allNullsBefore <= 3) {
-    score += 3;
+    score += 3 * profile.journalCompletionWeight;
   }
 
   return score;
 }
 
-function selectBestJournalingGroup(engine, playerId) {
+function selectBestJournalingGroup(engine, playerId, profile) {
   const options = engine.getJournalingOptions(playerId);
   const state = engine.getState();
   const player = getPlayer(state, playerId);
@@ -83,7 +165,7 @@ function selectBestJournalingGroup(engine, playerId) {
           possiblePlacements += 1;
           bestPlacementScore = Math.max(
             bestPlacementScore,
-            estimateJournalPlacementValue(journal, cell.row, cell.col, value),
+            estimateJournalPlacementValue(journal, cell.row, cell.col, value, profile),
           );
         });
       });
@@ -91,7 +173,9 @@ function selectBestJournalingGroup(engine, playerId) {
 
     const candidate = {
       key: option.key,
-      score: possiblePlacements * 10 + (Number.isFinite(bestPlacementScore) ? bestPlacementScore : -1000),
+      score:
+        possiblePlacements * 10 * profile.journalGroupFlexWeight +
+        (Number.isFinite(bestPlacementScore) ? bestPlacementScore : -1000),
     };
     if (!best || candidate.score > best.score) {
       best = candidate;
@@ -105,7 +189,7 @@ function selectBestJournalingGroup(engine, playerId) {
   return true;
 }
 
-function findBestJournalPlacement(engine, playerId) {
+function findBestJournalPlacement(engine, playerId, profile) {
   const state = engine.getState();
   const player = getPlayer(state, playerId);
   if (!player) {
@@ -130,7 +214,7 @@ function findBestJournalPlacement(engine, playerId) {
           row: cell.row,
           col: cell.col,
           choice,
-          score: estimateJournalPlacementValue(journal, cell.row, cell.col, value),
+          score: estimateJournalPlacementValue(journal, cell.row, cell.col, value, profile),
         };
         if (!best || candidate.score > best.score) {
           best = candidate;
@@ -142,15 +226,19 @@ function findBestJournalPlacement(engine, playerId) {
   return best;
 }
 
-function chooseIdeaTargetInvention(player) {
+function chooseIdeaTargetInvention(player, profile) {
   const inventions = (Array.isArray(player.inventions) ? player.inventions : []).filter((item) => !item.presentedDay);
   let best = null;
   inventions.forEach((invention) => {
     const placements = Array.isArray(invention.placements) ? invention.placements.length : 0;
     const currentMultiplier = Number(invention.uniqueIdeasMarked || invention.multiplier || 1);
+    const completion = invention.completionStatus === 'complete' ? 1 : 0;
     const candidate = {
       inventionId: invention.id,
-      score: placements * 5 + currentMultiplier * 2,
+      score:
+        placements * 5 * profile.ideaTargetPlacementWeight +
+        currentMultiplier * 2 * profile.ideaTargetMultiplierWeight +
+        completion * profile.inventCompletionWeight,
     };
     if (!best || candidate.score > best.score) {
       best = candidate;
@@ -159,7 +247,7 @@ function chooseIdeaTargetInvention(player) {
   return best;
 }
 
-function assignPendingIdeas(engine, playerId) {
+function assignPendingIdeas(engine, playerId, profile) {
   let assigned = 0;
   for (let guard = 0; guard < 8; guard += 1) {
     const state = engine.getState();
@@ -172,7 +260,7 @@ function assignPendingIdeas(engine, playerId) {
       break;
     }
 
-    const target = chooseIdeaTargetInvention(player);
+    const target = chooseIdeaTargetInvention(player, profile);
     if (!target) {
       break;
     }
@@ -274,20 +362,19 @@ function placeFirstLegalJournalNumber(engine, playerId) {
   return false;
 }
 
-function playJournalPhase(engine, playerId, trace) {
+function playJournalPhase(engine, playerId, trace, personaName, profile) {
   const state = engine.getState();
   const selection = state.journalSelections?.[playerId];
   if (!selection?.selectedGroupKey) {
-    selectBestJournalingGroup(engine, playerId);
+    selectBestJournalingGroup(engine, playerId, profile);
   }
 
-  let placed = 0;
   for (let guard = 0; guard < 8; guard += 1) {
-    let action = findBestJournalPlacement(engine, playerId);
+    let action = findBestJournalPlacement(engine, playerId, profile);
     const currentSelection = engine.getState().journalSelections?.[playerId];
     if (!action && Number(currentSelection?.placementsThisTurn || 0) < 1) {
-      if (selectBestJournalingGroup(engine, playerId)) {
-        action = findBestJournalPlacement(engine, playerId);
+      if (selectBestJournalingGroup(engine, playerId, profile)) {
+        action = findBestJournalPlacement(engine, playerId, profile);
       }
     }
     if (!action) {
@@ -307,17 +394,15 @@ function playJournalPhase(engine, playerId, trace) {
       break;
     }
 
-    placed += 1;
-    trace.push({ playerId, phase: 'journal', action: 'placeJournalNumber', detail: action });
+    trace.push({ playerId, persona: personaName, phase: 'journal', action: 'placeJournalNumber', detail: action });
   }
 
-  const assigned = assignPendingIdeas(engine, playerId);
+  const assigned = assignPendingIdeas(engine, playerId, profile);
   if (assigned > 0) {
-    trace.push({ playerId, phase: 'journal', action: 'assignJournalIdea', count: assigned });
+    trace.push({ playerId, persona: personaName, phase: 'journal', action: 'assignJournalIdea', count: assigned });
   }
 
   engine.advancePhase();
-  return placed;
 }
 
 function couldPlaceFromValues(cell, values) {
@@ -327,7 +412,7 @@ function couldPlaceFromValues(cell, values) {
   return values.includes(Number(cell.value));
 }
 
-function scoreWorkshopCell(workshop, row, col) {
+function scoreWorkshopCell(workshop, row, col, profile) {
   const ideas = Array.isArray(workshop.ideas) ? workshop.ideas : [];
   let ideaBonus = 0;
   ideas.forEach((idea) => {
@@ -341,13 +426,13 @@ function scoreWorkshopCell(workshop, row, col) {
       { row: idea.row + 1, col: idea.col + 1 },
     ];
     if (points.some((point) => point.row === row && point.col === col)) {
-      ideaBonus += 4;
+      ideaBonus += 4 * profile.workshopIdeaWeight;
     }
   });
-  return 2 + ideaBonus;
+  return 2 * profile.workshopOpenWeight + ideaBonus;
 }
 
-function selectBestWorkshopGroup(engine, playerId) {
+function selectBestWorkshopGroup(engine, playerId, profile) {
   const options = engine.getWorkshoppingOptions(playerId);
   const state = engine.getState();
   const player = getPlayer(state, playerId);
@@ -370,7 +455,7 @@ function selectBestWorkshopGroup(engine, playerId) {
 
     const candidate = {
       key: option.key,
-      score: possible * 10,
+      score: possible * 10 * profile.workshopOpenWeight,
     };
     if (!best || candidate.score > best.score) {
       best = candidate;
@@ -384,7 +469,7 @@ function selectBestWorkshopGroup(engine, playerId) {
   return true;
 }
 
-function findBestWorkshopPlacement(engine, playerId) {
+function findBestWorkshopPlacement(engine, playerId, profile) {
   const state = engine.getState();
   const player = getPlayer(state, playerId);
   if (!player) {
@@ -407,7 +492,7 @@ function findBestWorkshopPlacement(engine, playerId) {
           row: entry.row,
           col: entry.col,
           choice,
-          score: scoreWorkshopCell(workshop, entry.row, entry.col),
+          score: scoreWorkshopCell(workshop, entry.row, entry.col, profile),
         };
         if (!best || candidate.score > best.score) {
           best = candidate;
@@ -451,15 +536,15 @@ function placeFirstLegalWorkshopPart(engine, playerId) {
   return false;
 }
 
-function playWorkshopPhase(engine, playerId, trace) {
+function playWorkshopPhase(engine, playerId, trace, personaName, profile) {
   const state = engine.getState();
   const selection = state.workshopSelections?.[playerId];
   if (!selection?.selectedGroupKey) {
-    selectBestWorkshopGroup(engine, playerId);
+    selectBestWorkshopGroup(engine, playerId, profile);
   }
 
   for (let guard = 0; guard < 8; guard += 1) {
-    const action = findBestWorkshopPlacement(engine, playerId);
+    const action = findBestWorkshopPlacement(engine, playerId, profile);
     if (!action) {
       break;
     }
@@ -475,7 +560,7 @@ function playWorkshopPhase(engine, playerId, trace) {
     if (!result.ok) {
       break;
     }
-    trace.push({ playerId, phase: 'workshop', action: 'placeWorkshopPart', detail: action });
+    trace.push({ playerId, persona: personaName, phase: 'workshop', action: 'placeWorkshopPart', detail: action });
   }
 
   engine.advancePhase();
@@ -485,30 +570,23 @@ function pointKey(point) {
   return String(point.row) + ':' + String(point.col);
 }
 
-function collectCommittedMechanismCells(player, workshopId) {
-  const committed = new Set();
-  (Array.isArray(player.mechanisms) ? player.mechanisms : [])
-    .filter((mechanism) => mechanism.workshopId === workshopId)
-    .forEach((mechanism) => {
-      (Array.isArray(mechanism.path) ? mechanism.path : []).forEach((point) => {
-        committed.add(pointKey(point));
-      });
-    });
-  return committed;
-}
-
-function getLargestWorkshopComponent(state, playerId) {
+function collectWorkshopComponents(state, playerId) {
   const player = getPlayer(state, playerId);
   if (!player) {
-    return null;
+    return [];
   }
 
-  let best = null;
+  const components = [];
   (Array.isArray(player.workshops) ? player.workshops : []).forEach((workshop) => {
-    const committed = collectCommittedMechanismCells(player, workshop.id);
+    const committed = new Set(
+      (Array.isArray(player.mechanisms) ? player.mechanisms : [])
+        .filter((mechanism) => mechanism.workshopId === workshop.id)
+        .flatMap((mechanism) => (Array.isArray(mechanism.path) ? mechanism.path : []))
+        .map((point) => pointKey(point)),
+    );
+
     const rows = Array.isArray(workshop.cells) ? workshop.cells : [];
     const eligible = new Set();
-
     rows.forEach((row, rowIndex) => {
       (Array.isArray(row) ? row : []).forEach((cell, colIndex) => {
         if (!cell || cell.kind === 'empty' || !cell.circled) {
@@ -528,12 +606,12 @@ function getLargestWorkshopComponent(state, playerId) {
       }
       const [startRow, startCol] = key.split(':').map(Number);
       const queue = [{ row: startRow, col: startCol }];
-      const component = [];
+      const path = [];
       seen.add(key);
 
       while (queue.length > 0) {
         const current = queue.shift();
-        component.push(current);
+        path.push(current);
         const neighbors = [
           { row: current.row - 1, col: current.col },
           { row: current.row + 1, col: current.col },
@@ -550,25 +628,59 @@ function getLargestWorkshopComponent(state, playerId) {
         });
       }
 
-      if (!best || component.length > best.path.length) {
-        best = {
-          workshopId: workshop.id,
-          path: component,
-        };
+      if (path.length >= 2) {
+        components.push({ workshopId: workshop.id, path, workshop });
       }
     });
   });
 
-  if (!best || best.path.length < 2) {
-    return null;
-  }
+  return components;
+}
+
+function getToolTargetScore(size) {
+  const targets = [5, 7, 8];
+  return Math.max(...targets.map((target) => Math.max(0, 8 - Math.abs(size - target))));
+}
+
+function getIdeaCoverageScore(workshop, path) {
+  const pathKeys = new Set((Array.isArray(path) ? path : []).map((point) => pointKey(point)));
+  let score = 0;
+  (Array.isArray(workshop?.ideas) ? workshop.ideas : []).forEach((idea) => {
+    if (idea.status === 'unlocked') {
+      return;
+    }
+    const surround = [
+      { row: idea.row, col: idea.col },
+      { row: idea.row, col: idea.col + 1 },
+      { row: idea.row + 1, col: idea.col },
+      { row: idea.row + 1, col: idea.col + 1 },
+    ];
+    const covered = surround.filter((point) => pathKeys.has(pointKey(point))).length;
+    score += covered;
+  });
+  return score;
+}
+
+function chooseBuildComponent(engine, state, playerId, profile) {
+  const components = collectWorkshopComponents(state, playerId);
+  let best = null;
+  components.forEach((component) => {
+    const size = component.path.length;
+    const toolTarget = getToolTargetScore(size) * profile.buildToolTargetWeight;
+    const ideaCoverage = getIdeaCoverageScore(component.workshop, component.path) * profile.workshopIdeaWeight;
+    const sizeValue = size * profile.buildSizeWeight;
+    const score = sizeValue + toolTarget + ideaCoverage;
+    if (!best || score > best.score) {
+      best = { ...component, score };
+    }
+  });
   return best;
 }
 
-function playBuildPhase(engine, playerId, trace) {
+function playBuildPhase(engine, playerId, trace, personaName, profile) {
   const state = engine.getState();
   if (engine.canBuildThisTurn(state, playerId)) {
-    const component = getLargestWorkshopComponent(state, playerId);
+    const component = chooseBuildComponent(engine, state, playerId, profile);
     if (component) {
       engine.clearMechanismDraft(playerId);
       component.path.forEach((point) => {
@@ -578,6 +690,7 @@ function playBuildPhase(engine, playerId, trace) {
       if (result.ok) {
         trace.push({
           playerId,
+          persona: personaName,
           phase: 'build',
           action: 'finishBuildingMechanism',
           workshopId: component.workshopId,
@@ -600,7 +713,7 @@ function countOpenCells(patternRows) {
   return patternRows.reduce((sum, row) => sum + row.split('').filter((cell) => cell === '1').length, 0);
 }
 
-function findBestInventPlacement(engine, playerId) {
+function findBestInventPlacement(engine, playerId, profile) {
   const state = engine.getState();
   const player = getPlayer(state, playerId);
   if (!player) {
@@ -658,14 +771,17 @@ function findBestInventPlacement(engine, playerId) {
           }
 
           const nextFilled = filledNow + placementCells.length;
-          const completionBonus = nextFilled >= openCellCount ? 25 : (nextFilled / Math.max(1, openCellCount)) * 10;
-          const newWorkshopMark = invention.workshopTypeMarks?.[mechanism.workshopId] ? 0 : 6;
+          const completionBonus = (nextFilled >= openCellCount ? 25 : (nextFilled / Math.max(1, openCellCount)) * 10)
+            * profile.inventCompletionWeight;
+          const newWorkshopMark = (invention.workshopTypeMarks?.[mechanism.workshopId] ? 0 : 6)
+            * profile.inventVarietyWeight;
+          const ideaValue = Number(mechanism.ideaCount || 0) * 8 * profile.inventIdeaWeight;
           const candidate = {
             inventionId: invention.id,
             anchorRow: row,
             anchorCol: col,
             transform,
-            score: completionBonus + newWorkshopMark + Number(mechanism.ideaCount || 0) * 8,
+            score: completionBonus + newWorkshopMark + ideaValue,
           };
 
           if (!best || candidate.score > best.score) {
@@ -679,8 +795,8 @@ function findBestInventPlacement(engine, playerId) {
   return best;
 }
 
-function playInventPhase(engine, playerId, trace) {
-  const action = findBestInventPlacement(engine, playerId);
+function playInventPhase(engine, playerId, trace, personaName, profile) {
+  const action = findBestInventPlacement(engine, playerId, profile);
   if (action) {
     if (engine.hasTool(playerId, 'T1')) {
       engine.resetPendingMechanismTransform(playerId);
@@ -694,16 +810,16 @@ function playInventPhase(engine, playerId, trace) {
 
     const result = engine.placeMechanismInInvention(playerId, action.inventionId, action.anchorRow, action.anchorCol);
     if (result.ok) {
-      trace.push({ playerId, phase: 'invent', action: 'placeMechanismInInvention', detail: action });
+      trace.push({ playerId, persona: personaName, phase: 'invent', action: 'placeMechanismInInvention', detail: action });
     }
   }
 
   engine.advancePhase();
 }
 
-function forceProgressIfStuck(engine, phase, playerId, trace) {
+function forceProgressIfStuck(engine, phase, playerId, trace, personaName, profile) {
   if (phase === 'journal') {
-    selectBestJournalingGroup(engine, playerId);
+    selectBestJournalingGroup(engine, playerId, profile);
     if (!placeFirstLegalJournalNumber(engine, playerId)) {
       assignPendingIdeasFirstLegal(engine, playerId);
       if (!placeFirstLegalJournalNumber(engine, playerId)) {
@@ -726,15 +842,15 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
         journalSelections: nextJournalSelections,
         workshopPhaseContext: nextWorkshopContext,
       });
-      trace.push({ playerId, phase: 'journal', action: 'fallback_forced_phase_jump' });
+      trace.push({ playerId, persona: personaName, phase: 'journal', action: 'fallback_forced_phase_jump' });
       return;
     }
-    trace.push({ playerId, phase: 'journal', action: 'fallback_force_progress' });
+    trace.push({ playerId, persona: personaName, phase: 'journal', action: 'fallback_force_progress' });
     return;
   }
 
   if (phase === 'workshop') {
-    selectBestWorkshopGroup(engine, playerId);
+    selectBestWorkshopGroup(engine, playerId, profile);
     placeFirstLegalWorkshopPart(engine, playerId);
     engine.advancePhase();
     const after = engine.getState();
@@ -745,10 +861,10 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
         phase: 'build',
         workshopSelections: nextWorkshopSelections,
       });
-      trace.push({ playerId, phase: 'workshop', action: 'fallback_forced_phase_jump' });
+      trace.push({ playerId, persona: personaName, phase: 'workshop', action: 'fallback_forced_phase_jump' });
       return;
     }
-    trace.push({ playerId, phase: 'workshop', action: 'fallback_force_progress' });
+    trace.push({ playerId, persona: personaName, phase: 'workshop', action: 'fallback_force_progress' });
     return;
   }
 
@@ -757,6 +873,7 @@ function forceProgressIfStuck(engine, phase, playerId, trace) {
 
 function playStep(engine, options = {}) {
   const playerId = options.playerId || 'P1';
+  const personaName = String(options.persona || 'adaptive_opportunist');
   const trace = options.trace && typeof options.trace.push === 'function'
     ? options.trace
     : { push() {} };
@@ -766,31 +883,33 @@ function playStep(engine, options = {}) {
     return;
   }
 
+  const profile = resolvePersonaProfile(personaName, state, playerId);
   const beforeFingerprint = JSON.stringify(state);
   const phase = state.phase;
 
   if (phase === 'roll_and_group') {
     engine.advancePhase();
-    trace.push({ playerId, phase: 'roll_and_group', action: 'advancePhase' });
+    trace.push({ playerId, persona: personaName, phase: 'roll_and_group', action: 'advancePhase' });
   } else if (phase === 'journal') {
-    playJournalPhase(engine, playerId, trace);
+    playJournalPhase(engine, playerId, trace, personaName, profile);
   } else if (phase === 'workshop') {
-    playWorkshopPhase(engine, playerId, trace);
+    playWorkshopPhase(engine, playerId, trace, personaName, profile);
   } else if (phase === 'build') {
-    playBuildPhase(engine, playerId, trace);
+    playBuildPhase(engine, playerId, trace, personaName, profile);
   } else if (phase === 'invent') {
-    playInventPhase(engine, playerId, trace);
+    playInventPhase(engine, playerId, trace, personaName, profile);
   } else {
     engine.advancePhase();
   }
 
   const afterFingerprint = JSON.stringify(engine.getState());
   if (afterFingerprint === beforeFingerprint) {
-    forceProgressIfStuck(engine, phase, playerId, trace);
+    forceProgressIfStuck(engine, phase, playerId, trace, personaName, profile);
   }
 }
 
 module.exports = {
   name: 'vp-greedy',
+  personaNames: [...PERSONA_NAMES],
   playStep,
 };

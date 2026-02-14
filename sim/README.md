@@ -22,6 +22,7 @@ Available flags:
 - `--trace-rate <0..1>`: fraction of games to save full action traces for (default `0.1`)
 - `--max-steps <n>`: safety limit to prevent infinite loops (default `400`)
 - `--output-dir <path>`: custom output folder (default `sim/output/latest`)
+- `--personas <csv>`: persona pool assigned to players in rotating order per game (default policy personas)
 
 ## Output files
 
@@ -30,13 +31,14 @@ Default output directory: `sim/output/latest`
 - `summary.csv`: one row per game for fast statistical analysis
 - `summary.json`: per-game deep summary including:
   - winner ids + winner margin
+  - per-game `personaAssignments` by player id
   - per-player invention score breakdowns
   - mechanism size histograms
   - tool unlock details
   - phase/action metrics and fallback counts
   - warning/block reason counts from engine logs
 - `games.ndjson`: one JSON object per game
-- `traces.ndjson`: sampled per-action traces (only when sampled traces exist)
+- `traces.ndjson`: sampled per-action traces (only when sampled traces exist), each entry includes `personaAssignments`
 
 ## Notes
 
