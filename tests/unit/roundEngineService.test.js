@@ -488,6 +488,95 @@ test('RoundEngineService finish building spends wrenches and enforces once per t
   assert.equal(second.reason, 'already_built_this_turn');
 });
 
+test('RoundEngineService unlocks a tool when built mechanism matches tool shape', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  harness.engine.gameStateService.update({
+    players: state.players,
+    buildDrafts: {
+      P1: {
+        workshopId: 'W1',
+        path: [
+          { row: 1, col: 1 },
+          { row: 0, col: 1 },
+          { row: 1, col: 0 },
+          { row: 1, col: 2 },
+          { row: 2, col: 1 },
+        ],
+      },
+    },
+  });
+
+  const built = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(built.ok, true);
+  const after = harness.getState();
+  const player = after.players.find((item) => item.id === 'P1');
+  assert.equal(player.unlockedTools.length, 1);
+  assert.equal(player.unlockedTools[0].name, 'Torque');
+  assert.equal(player.unlockedTools[0].unlockTier, 'first');
+  assert.equal(player.toolScore, 4);
+});
+
+test('RoundEngineService does not unlock the same tool twice for one player', () => {
+  const harness = createHarness({ phase: 'build' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.journals[0].rowWrenches[0] = 'earned';
+  p1.journals[0].columnWrenches[0] = 'earned';
+  p1.journals[1].rowWrenches[1] = 'earned';
+  p1.journals[1].columnWrenches[1] = 'earned';
+  harness.engine.gameStateService.update({
+    players: state.players,
+    buildDrafts: {
+      P1: {
+        workshopId: 'W1',
+        path: [
+          { row: 1, col: 1 },
+          { row: 0, col: 1 },
+          { row: 1, col: 0 },
+          { row: 1, col: 2 },
+          { row: 2, col: 1 },
+        ],
+      },
+    },
+  });
+
+  const firstBuild = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(firstBuild.ok, true);
+
+  const secondState = harness.getState();
+  harness.engine.gameStateService.update({
+    ...secondState,
+    phase: 'build',
+    turnNumber: 2,
+    buildDrafts: {
+      P1: {
+        workshopId: 'W2',
+        path: [
+          { row: 1, col: 1 },
+          { row: 0, col: 1 },
+          { row: 1, col: 0 },
+          { row: 1, col: 2 },
+          { row: 2, col: 1 },
+        ],
+      },
+    },
+  });
+
+  const secondBuild = harness.engine.finishBuildingMechanism('P1');
+  assert.equal(secondBuild.ok, true);
+
+  const after = harness.getState();
+  const player = after.players.find((item) => item.id === 'P1');
+  assert.equal(player.unlockedTools.length, 1);
+  assert.equal(player.toolScore, 4);
+});
+
 test('RoundEngineService unlocks workshop idea when one mechanism covers all four surrounding parts', () => {
   const harness = createHarness({ phase: 'build' });
   harness.engine.initializePlayers(['P1']);

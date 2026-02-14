@@ -1530,6 +1530,89 @@ button:hover {
   font-weight: 700;
 }
 
+.tool-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.tool-card {
+  border: 1px solid #cbd5e1;
+  border-radius: 0.7rem;
+  background: #f8fafc;
+  padding: 0.65rem 0.75rem;
+  display: grid;
+  gap: 0.45rem;
+  justify-items: start;
+}
+
+.tool-card--unlocked {
+  border-color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.tool-card__head {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tool-card__status {
+  color: #475569;
+  font-size: 0.88rem;
+}
+
+.tool-card__shape {
+  width: 100%;
+}
+
+.tool-shape {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(var(--tool-shape-cols, 3), 12px);
+}
+
+.tool-shape-cell {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+}
+
+.tool-shape-cell--filled {
+  border-color: #475569;
+  background: #334155;
+  position: relative;
+}
+
+.tool-shape-cell--edge-right::after {
+  content: "";
+  position: absolute;
+  left: calc(100% - 1px);
+  top: 50%;
+  width: 8px;
+  height: 4px;
+  transform: translateY(-50%);
+  background: #334155;
+}
+
+.tool-shape-cell--edge-down::before {
+  content: "";
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  width: 4px;
+  height: 8px;
+  transform: translateX(-50%);
+  background: #334155;
+}
+
+.tool-card__ability {
+  color: #334155;
+  font-size: 0.86rem;
+  line-height: 1.25;
+}
+
 @media (max-width: 880px) {
   .app {
     height: auto;

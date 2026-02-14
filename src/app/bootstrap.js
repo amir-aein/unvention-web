@@ -494,6 +494,7 @@
     renderJournals(withAutoWorkshopState, p1);
     renderWorkshops(withAutoWorkshopState, p1);
     renderInventions(withAutoWorkshopState, p1);
+    renderToolsPanel(withAutoWorkshopState, p1);
     maybeAutoScrollToPhaseSection(withAutoWorkshopState);
     maybeAutoResolveRollPhase(withAutoWorkshopState);
     updateActiveAnchorFromScroll();
@@ -877,6 +878,11 @@
       : "<span class='journal-muted'>none</span>";
     const wrenchOverflow = available > 24 ? "<span class='journal-muted'> +" + String(available - 24) + "</span>" : "";
     const totalScore = Number(player?.totalScore || 0);
+    const toolScore = Number(player?.toolScore || 0);
+    const unlockedTools = Array.isArray(player?.unlockedTools) ? player.unlockedTools : [];
+    const unlockedToolNames = unlockedTools.length > 0
+      ? unlockedTools.map((tool) => String(tool.name || tool.id || "")).filter(Boolean).join(", ")
+      : "none";
     const completedJournals = Number(player?.completedJournals || 0);
     const currentDay = String(state?.currentDay || "Friday");
     summary.innerHTML =
@@ -884,12 +890,112 @@
       "<div class='summary-info'>" +
       "<div><strong>Day:</strong> " + currentDay + "</div>" +
       "<div><strong>Total score:</strong> " + String(totalScore) + "</div>" +
+      "<div><strong>Tool score:</strong> " + String(toolScore) + "</div>" +
       "<div><strong>Completed journals:</strong> " + String(completedJournals) + "/3</div>" +
-      "<div><strong>Tools unlocked:</strong> none</div>" +
+      "<div><strong>Tools unlocked:</strong> " + unlockedToolNames + "</div>" +
       "</div>" +
       "<div class='summary-wrench-box'><strong>Wrenches</strong><span class='summary-wrenches'>" + wrenchTokens + wrenchOverflow + "</span></div>" +
       "</div>" +
       "";
+  }
+
+  function renderToolsPanel(_state, player) {
+    const container = document.getElementById("tools-panel");
+    if (!container) {
+      return;
+    }
+    const catalog = typeof roundEngineService.getDefaultToolCatalog === "function"
+      ? roundEngineService.getDefaultToolCatalog()
+      : [];
+    const unlockedById = new Map(
+      (Array.isArray(player?.unlockedTools) ? player.unlockedTools : []).map((item) => [String(item.id), item]),
+    );
+    if (catalog.length === 0) {
+      container.innerHTML = '<h2>Tools</h2><p class="tools-placeholder">No tools configured.</p>';
+      return;
+    }
+    const cards = catalog
+      .map((tool) => {
+        const unlock = unlockedById.get(String(tool.id));
+        const unlocked = Boolean(unlock);
+        const tierText = unlock?.unlockTier === "first" ? "First unlock" : "Later unlock";
+        const pointsText = unlocked
+          ? ("+" + String(Number(unlock?.pointsAwarded || 0)) + " points")
+          : (
+              String(Number(tool.firstUnlockPoints || 0)) +
+              "/" +
+              String(Number(tool.laterUnlockPoints || 0)) +
+              " points"
+            );
+        const shape = renderToolShape(tool.pattern);
+        return (
+          '<article class="tool-card' +
+          (unlocked ? " tool-card--unlocked" : "") +
+          '">' +
+          "<div class='tool-card__shape'>" +
+          shape.html +
+          "</div>" +
+          '<div class="tool-card__head">' +
+          "<strong>" +
+          String(tool.name) +
+          "</strong>" +
+          '<span class="tool-card__status">' +
+          (unlocked ? (tierText + " · " + pointsText) : ("Locked · " + pointsText)) +
+          "</span>" +
+          '<span class="tool-card__ability">' +
+          String(tool.abilityText || "") +
+          "</span>" +
+          "</div>" +
+          "</article>"
+        );
+      })
+      .join("");
+    container.innerHTML = "<h2>Tools</h2><div class='tool-grid'>" + cards + "</div>";
+  }
+
+  function renderToolShape(patternRows) {
+    const rows = Array.isArray(patternRows) ? patternRows.map((row) => String(row)) : [];
+    if (rows.length === 0) {
+      return { html: "" };
+    }
+    const cols = rows.reduce((maxCols, row) => Math.max(maxCols, row.length), 1);
+    const paddedRows = rows.map((row) => row.padEnd(cols, "0"));
+    const filledKeys = new Set();
+    paddedRows.forEach((row, rowIndex) => {
+      row.split("").forEach((cell, colIndex) => {
+        if (cell === "1") {
+          filledKeys.add(String(rowIndex) + ":" + String(colIndex));
+        }
+      });
+    });
+    const html = rows
+      .map((row) => row.padEnd(cols, "0"))
+      .map((row, rowIndex) =>
+        row
+          .split("")
+          .map((cell, colIndex) => {
+            const key = String(rowIndex) + ":" + String(colIndex);
+            const hasRight = filledKeys.has(key) && filledKeys.has(String(rowIndex) + ":" + String(colIndex + 1));
+            const hasDown = filledKeys.has(key) && filledKeys.has(String(rowIndex + 1) + ":" + String(colIndex));
+            return (
+              '<span class="tool-shape-cell' +
+              (cell === "1" ? " tool-shape-cell--filled" : "") +
+              (hasRight ? " tool-shape-cell--edge-right" : "") +
+              (hasDown ? " tool-shape-cell--edge-down" : "") +
+              '"></span>'
+            );
+          })
+          .join(""),
+      )
+      .join("");
+    return {
+      html:
+        '<span class="tool-shape" style="--tool-shape-cols:' +
+        String(cols) +
+        '">' +
+        html +
+        "</span>",
+    };
   }
 
   function renderWorkshops(state, player) {

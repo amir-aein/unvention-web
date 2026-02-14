@@ -72,6 +72,61 @@
     I2: { Friday: 13, Saturday: 11, Sunday: 8 },
     I3: { Friday: 18, Saturday: 16, Sunday: 12 },
   };
+  const TOOL_TEMPLATES = [
+    {
+      id: "T1",
+      name: "Torque",
+      firstUnlockPoints: 4,
+      laterUnlockPoints: 2,
+      abilityText: "You may rotate and/or mirror shapes.",
+      // Plus shape.
+      pattern: [
+        "010",
+        "111",
+        "010",
+      ],
+    },
+    {
+      id: "T2",
+      name: "Flywheel",
+      firstUnlockPoints: 3,
+      laterUnlockPoints: 1,
+      abilityText: "Building mechanisms costs 1 wrench.",
+      // Icon shape from sheet.
+      pattern: [
+        "0010",
+        "1110",
+        "0111",
+        "0100",
+      ],
+    },
+    {
+      id: "T3",
+      name: "Ball Bearing",
+      firstUnlockPoints: 3,
+      laterUnlockPoints: 1,
+      abilityText: "Once per turn, you may modify a single die by ±1.",
+      // Icon shape from sheet.
+      pattern: [
+        "1100",
+        "1111",
+        "0011",
+      ],
+    },
+    {
+      id: "T4",
+      name: "Reamer",
+      firstUnlockPoints: 5,
+      laterUnlockPoints: 2,
+      abilityText: "You may mark multiple workshops or journals in a single turn.",
+      // Icon shape from sheet.
+      pattern: [
+        "101",
+        "111",
+        "101",
+      ],
+    },
+  ];
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],
@@ -162,6 +217,22 @@
         criterionLabel: template.criterionLabel,
         pattern: template.pattern.map((row) => String(row)),
       }));
+    }
+
+    getDefaultToolCatalog() {
+      return TOOL_TEMPLATES.map((template) => {
+        const pattern = template.pattern.map((row) => String(row));
+        const points = this.patternToPoints(pattern);
+        return {
+          id: template.id,
+          name: template.name,
+          abilityText: String(template.abilityText || ""),
+          firstUnlockPoints: Number(template.firstUnlockPoints),
+          laterUnlockPoints: Number(template.laterUnlockPoints),
+          pattern,
+          shapeSignature: this.getMechanismShapeSignature(points, true),
+        };
+      });
     }
 
     getJournalingOptions(playerId) {
@@ -604,6 +675,8 @@
         builtAtDay: state.currentDay,
       });
       player.mechanisms = mechanisms;
+      const latestMechanism = mechanisms[mechanisms.length - 1];
+      const toolUnlockResult = this.unlockToolsForMechanism(playerId, player, latestMechanism, state);
       player.spentWrenches = Number(player.spentWrenches || 0) + cost;
       player.lastBuildAtTurn = state.turnNumber;
       player.lastBuildAtDay = state.currentDay;
@@ -614,6 +687,7 @@
       const updated = this.gameStateService.update({
         players,
         buildDrafts: drafts,
+        toolUnlockRegistry: toolUnlockResult.registry,
       });
       this.loggerService.logEvent("info", "Player X finished building in " + draft.workshopId, {
         playerId,
@@ -633,7 +707,89 @@
           },
         );
       });
+      toolUnlockResult.unlocked.forEach((unlock) => {
+        this.loggerService.logEvent(
+          "info",
+          "You unlocked " + String(unlock.name) + " (+" + String(unlock.pointsAwarded) + ")",
+          {
+            playerId,
+            toolId: unlock.id,
+            pointsAwarded: unlock.pointsAwarded,
+            unlockTier: unlock.unlockTier,
+            mechanismId: latestMechanism.id,
+          },
+        );
+      });
       return { ok: true, reason: null, state: updated };
+    }
+
+    unlockToolsForMechanism(playerId, player, mechanism, state) {
+      const tools = this.getDefaultToolCatalog();
+      const mechanismSignature = this.getMechanismShapeSignature(mechanism.path, true);
+      const alreadyUnlocked = new Set(
+        (Array.isArray(player.unlockedTools) ? player.unlockedTools : []).map((item) => String(item.id)),
+      );
+      const registry = {
+        ...(state.toolUnlockRegistry || {}),
+      };
+      const unlocked = [];
+
+      tools.forEach((tool) => {
+        if (!tool.shapeSignature || tool.shapeSignature !== mechanismSignature) {
+          return;
+        }
+        if (alreadyUnlocked.has(String(tool.id))) {
+          return;
+        }
+
+        const existing = registry[tool.id];
+        const sameTurnAsFirstUnlock =
+          Boolean(existing) &&
+          Number(existing.firstUnlockedTurn) === Number(state.turnNumber) &&
+          String(existing.firstUnlockedDay) === String(state.currentDay);
+        const isFirstUnlockTier = !existing || sameTurnAsFirstUnlock;
+        const pointsAwarded = isFirstUnlockTier
+          ? Number(tool.firstUnlockPoints)
+          : Number(tool.laterUnlockPoints);
+
+        const nextUnlock = {
+          id: tool.id,
+          name: tool.name,
+          unlockTier: isFirstUnlockTier ? "first" : "later",
+          pointsAwarded,
+          firstUnlockPoints: Number(tool.firstUnlockPoints),
+          laterUnlockPoints: Number(tool.laterUnlockPoints),
+          unlockedAtTurn: Number(state.turnNumber),
+          unlockedAtDay: String(state.currentDay),
+          mechanismId: String(mechanism.id || ""),
+        };
+        player.unlockedTools = Array.isArray(player.unlockedTools)
+          ? [...player.unlockedTools, nextUnlock]
+          : [nextUnlock];
+        player.toolScore = Number(player.toolScore || 0) + pointsAwarded;
+        unlocked.push(nextUnlock);
+
+        if (!existing) {
+          registry[tool.id] = {
+            firstUnlockedTurn: Number(state.turnNumber),
+            firstUnlockedDay: String(state.currentDay),
+            playerIds: [String(playerId)],
+          };
+          return;
+        }
+        if (sameTurnAsFirstUnlock) {
+          const existingPlayers = Array.isArray(existing.playerIds) ? [...existing.playerIds] : [];
+          if (!existingPlayers.includes(String(playerId))) {
+            existingPlayers.push(String(playerId));
+          }
+          registry[tool.id] = {
+            ...existing,
+            playerIds: existingPlayers,
+          };
+        }
+      });
+
+      return { unlocked, registry };
     }
 
     updateUnlockedWorkshopIdeas(workshop, mechanismPath, state) {
@@ -980,6 +1136,19 @@
       return variants.sort()[0];
     }
 
+    patternToPoints(patternRows) {
+      const rows = Array.isArray(patternRows) ? patternRows.map((row) => String(row)) : [];
+      const points = [];
+      rows.forEach((rowText, rowIndex) => {
+        rowText.split("").forEach((cell, colIndex) => {
+          if (cell === "1") {
+            points.push({ row: rowIndex, col: colIndex });
+          }
+        });
+      });
+      return points;
+    }
+
     placeJournalNumber(playerId, rowIndex, columnIndex, journalId) {
       const state = this.gameStateService.getState();
       const player = this.findPlayer(state, playerId);
@@ -1160,6 +1329,8 @@
         completedJournals: 0,
         spentWrenches: 0,
         totalScore: 0,
+        toolScore: 0,
+        unlockedTools: [],
         mechanisms: [],
         inventions: this.getDefaultInventionCatalog().map((item) => this.createDefaultInvention(item.id)),
         lastBuildAtTurn: null,
@@ -1306,6 +1477,12 @@
         if (!Number.isFinite(Number(player.totalScore))) {
           changed = true;
         }
+        if (!Number.isFinite(Number(player.toolScore))) {
+          changed = true;
+        }
+        if (!Array.isArray(player.unlockedTools)) {
+          changed = true;
+        }
         if (!changed) {
           const schemaMismatch = normalizedInventions.some((item, index) => {
             const previous = existing[index] || {};
@@ -1342,13 +1519,51 @@
         return {
           ...player,
           totalScore: Number(player.totalScore || 0),
+          toolScore: Number(player.toolScore || 0),
+          unlockedTools: Array.isArray(player.unlockedTools)
+            ? player.unlockedTools
+                .map((tool) => ({
+                  id: String(tool?.id || ""),
+                  name: String(tool?.name || ""),
+                  unlockTier: tool?.unlockTier === "first" ? "first" : "later",
+                  pointsAwarded: Number(tool?.pointsAwarded || 0),
+                  firstUnlockPoints: Number(tool?.firstUnlockPoints || 0),
+                  laterUnlockPoints: Number(tool?.laterUnlockPoints || 0),
+                  unlockedAtTurn: Number(tool?.unlockedAtTurn || 0),
+                  unlockedAtDay: String(tool?.unlockedAtDay || ""),
+                  mechanismId: String(tool?.mechanismId || ""),
+                }))
+                .filter((tool) => tool.id)
+            : [],
           inventions: normalizedInventions,
         };
       });
       if (!changed) {
         return state;
       }
-      return this.gameStateService.update({ players: normalizedPlayers });
+      const normalizedRegistry = this.normalizeToolUnlockRegistry(state.toolUnlockRegistry || {});
+      return this.gameStateService.update({
+        players: normalizedPlayers,
+        toolUnlockRegistry: normalizedRegistry,
+      });
+    }
+
+    normalizeToolUnlockRegistry(registry) {
+      const safeRegistry = registry && typeof registry === "object" ? registry : {};
+      const normalized = {};
+      Object.entries(safeRegistry).forEach(([toolId, entry]) => {
+        if (!toolId || !entry || typeof entry !== "object") {
+          return;
+        }
+        normalized[String(toolId)] = {
+          firstUnlockedTurn: Number(entry.firstUnlockedTurn || 0),
+          firstUnlockedDay: String(entry.firstUnlockedDay || ""),
+          playerIds: Array.isArray(entry.playerIds)
+            ? entry.playerIds.map((id) => String(id || "")).filter(Boolean)
+            : [],
+        };
+      });
+      return normalized;
     }
 
     createDefaultWorkshop(workshopNumber) {
