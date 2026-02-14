@@ -55,6 +55,7 @@
         phase: "roll_and_group",
         gameStatus: "active",
         gameStarted: false,
+        activePlayerId: "P1",
         players: [],
         rngSeed: "default-seed",
         rngState: 3288473048,
@@ -87,6 +88,12 @@
       }
       if (typeof merged.gameStarted !== "boolean") {
         merged.gameStarted = merged.players.length > 0;
+      }
+      const playerIds = merged.players
+        .map((player) => String(player?.id || "").trim())
+        .filter(Boolean);
+      if (typeof merged.activePlayerId !== "string" || !playerIds.includes(merged.activePlayerId)) {
+        merged.activePlayerId = playerIds[0] || defaults.activePlayerId;
       }
       if (typeof merged.rngSeed !== "string" || merged.rngSeed.length === 0) {
         merged.rngSeed = defaults.rngSeed;

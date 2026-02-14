@@ -1408,7 +1408,14 @@
       invention.multiplier = nextIdeas;
       this.recalculateInventionScoring(player, invention, state.currentDay);
       const players = state.players.map((item) => (item.id === player.id ? player : item));
-      const updated = this.gameStateService.update({ players });
+      const activePlayerId = this.getActivePlayerId({
+        ...state,
+        players,
+      });
+      const updated = this.gameStateService.update({
+        players,
+        activePlayerId,
+      });
       this.loggerService.logEvent(
         "info",
         "Player X assigned journal idea " + String(journal.id) + " to " + String(invention.name),
@@ -2152,8 +2159,81 @@
       return Array.from({ length: size }, () => Array.from({ length: size }, () => null));
     }
 
+    getOrderedPlayerIds(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      return (Array.isArray(state.players) ? state.players : [])
+        .map((player) => String(player?.id || "").trim())
+        .filter(Boolean);
+    }
+
+    getActivePlayerId(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      const ids = this.getOrderedPlayerIds(state);
+      if (ids.length === 0) {
+        return "P1";
+      }
+      const configured = String(state.activePlayerId || "").trim();
+      if (configured && ids.includes(configured)) {
+        return configured;
+      }
+      return ids[0];
+    }
+
+    getNextPlayerId(stateInput, playerId) {
+      const state = stateInput || this.gameStateService.getState();
+      const ids = this.getOrderedPlayerIds(state);
+      if (ids.length === 0) {
+        return String(playerId || "P1");
+      }
+      const current = String(playerId || this.getActivePlayerId(state));
+      const currentIndex = ids.indexOf(current);
+      if (currentIndex < 0) {
+        return ids[0];
+      }
+      return ids[(currentIndex + 1) % ids.length];
+    }
+
+    isLastPlayerInRound(stateInput, playerId) {
+      const state = stateInput || this.gameStateService.getState();
+      const ids = this.getOrderedPlayerIds(state);
+      if (ids.length <= 1) {
+        return true;
+      }
+      const current = String(playerId || this.getActivePlayerId(state));
+      return ids.indexOf(current) === ids.length - 1;
+    }
+
+    clearPlayerTurnArtifacts(stateInput, playerId) {
+      const state = stateInput || this.gameStateService.getState();
+      const key = String(playerId || this.getActivePlayerId(state));
+      const nextJournalSelections = { ...(state.journalSelections || {}) };
+      const nextWorkshopSelections = { ...(state.workshopSelections || {}) };
+      const nextWorkshopContext = { ...(state.workshopPhaseContext || {}) };
+      const nextBuildDrafts = { ...(state.buildDrafts || {}) };
+      const nextBuildDecisions = { ...(state.buildDecisions || {}) };
+      const nextTurnToolUsage = { ...(state.turnToolUsage || {}) };
+      const nextInventTransforms = { ...(state.inventTransforms || {}) };
+      delete nextJournalSelections[key];
+      delete nextWorkshopSelections[key];
+      delete nextWorkshopContext[key];
+      delete nextBuildDrafts[key];
+      delete nextBuildDecisions[key];
+      delete nextTurnToolUsage[key];
+      delete nextInventTransforms[key];
+      return {
+        journalSelections: nextJournalSelections,
+        workshopSelections: nextWorkshopSelections,
+        workshopPhaseContext: nextWorkshopContext,
+        buildDrafts: nextBuildDrafts,
+        buildDecisions: nextBuildDecisions,
+        turnToolUsage: nextTurnToolUsage,
+        inventTransforms: nextInventTransforms,
+      };
+    }
+
     advancePhase() {
       const state = this.gameStateService.getState();
+      const activePlayerId = this.getActivePlayerId(state);
 
       if (state.gameStatus === "completed") {
         this.loggerService.logEvent("warn", "Game already completed; phase cannot advance", {
@@ -2188,22 +2268,22 @@
 
         if (state.phase === "journal") {
           const preparedState = this.ensureJournalRoll(state);
-          return this.completeJournalPhase(preparedState);
+          return this.completeJournalPhase(preparedState, activePlayerId);
         }
 
         if (state.phase === "workshop") {
-          const canBuild = this.canBuildThisTurn(state, "P1");
+          const canBuild = this.canBuildThisTurn(state, activePlayerId);
           if (!canBuild) {
             this.loggerService.logEvent("info", "Build phase skipped (not enough wrenches)", {
-              playerId: "P1",
-              required: this.getBuildCost("P1"),
-              available: this.getAvailableWrenches("P1"),
+              playerId: activePlayerId,
+              required: this.getBuildCost(activePlayerId),
+              available: this.getAvailableWrenches(activePlayerId),
             });
-            if (!this.hasBuiltThisTurn(state, "P1")) {
+            if (!this.hasBuiltThisTurn(state, activePlayerId)) {
               this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
-                playerId: "P1",
+                playerId: activePlayerId,
               });
-              return this.completeTurn(state);
+              return this.completeTurn(state, activePlayerId);
             }
             const inventState = this.gameStateService.update({ phase: "invent" });
             return inventState;
@@ -2211,11 +2291,11 @@
         }
 
         if (state.phase === "build") {
-          if (!this.hasBuiltThisTurn(state, "P1")) {
+          if (!this.hasBuiltThisTurn(state, activePlayerId)) {
             this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
-              playerId: "P1",
+              playerId: activePlayerId,
             });
-            return this.completeTurn(state);
+            return this.completeTurn(state, activePlayerId);
           }
         }
 
@@ -2230,17 +2310,17 @@
         return updated;
       }
 
-      if (state.phase === "invent" && !this.hasBuiltThisTurn(state, "P1")) {
+      if (state.phase === "invent" && !this.hasBuiltThisTurn(state, activePlayerId)) {
         this.loggerService.logEvent("info", "Invent phase skipped (no mechanism built this turn)", {
-          playerId: "P1",
+          playerId: activePlayerId,
         });
       }
 
-      return this.completeTurn(state);
+      return this.completeTurn(state, activePlayerId);
     }
 
-    completeJournalPhase(stateAtJournalPhase) {
-      const playerId = "P1";
+    completeJournalPhase(stateAtJournalPhase, playerIdInput) {
+      const playerId = String(playerIdInput || this.getActivePlayerId(stateAtJournalPhase));
       const rollOutcome = stateAtJournalPhase.rollAndGroup?.outcomeType;
       if (rollOutcome === "quantum_leap") {
         const updatedQuantum = this.gameStateService.update({ phase: "workshop" });
@@ -2423,11 +2503,35 @@
       return { state, value };
     }
 
-    completeTurn(stateAtEndPhase) {
+    completeTurn(stateAtEndPhase, activePlayerIdInput) {
+      const activePlayerId = String(activePlayerIdInput || this.getActivePlayerId(stateAtEndPhase));
+      if (!this.isLastPlayerInRound(stateAtEndPhase, activePlayerId)) {
+        const nextPlayerId = this.getNextPlayerId(stateAtEndPhase, activePlayerId);
+        const cleared = this.clearPlayerTurnArtifacts(stateAtEndPhase, activePlayerId);
+        const rotated = this.gameStateService.update({
+          ...cleared,
+          activePlayerId: nextPlayerId,
+          phase: PHASES[0],
+        });
+        this.loggerService.logEvent("info", "Player turn completed", {
+          day: rotated.currentDay,
+          turnNumber: rotated.turnNumber,
+          playerId: activePlayerId,
+          nextPlayerId,
+        });
+        return rotated;
+      }
+
+      const resetForRound = this.clearPlayerTurnArtifacts(stateAtEndPhase, activePlayerId);
+      const normalizedState = {
+        ...stateAtEndPhase,
+        ...resetForRound,
+      };
       const dayResolution = this.resolveDayTransition(stateAtEndPhase);
       const stateWithScoring = dayResolution.endedDay
-        ? this.applyEndOfDayScoring(stateAtEndPhase, dayResolution.endedDay)
-        : stateAtEndPhase;
+        ? this.applyEndOfDayScoring(normalizedState, dayResolution.endedDay)
+        : normalizedState;
+      const firstPlayerId = this.getOrderedPlayerIds(stateWithScoring)[0] || activePlayerId;
 
       if (dayResolution.gameCompleted) {
         const completed = this.gameStateService.update({
@@ -2435,6 +2539,7 @@
           phase: PHASES[PHASES.length - 1],
           currentDay: dayResolution.finalDay,
           players: stateWithScoring.players,
+          activePlayerId: firstPlayerId,
           inventTransforms: {},
         });
 
@@ -2462,6 +2567,7 @@
           turnNumber: stateAtEndPhase.turnNumber + 1,
           phase: PHASES[0],
           players: stateWithScoring.players,
+          activePlayerId: firstPlayerId,
           journalSelections: {},
           workshopSelections: {},
           workshopPhaseContext: {},
@@ -2494,6 +2600,7 @@
       const nextTurn = this.gameStateService.update({
         turnNumber: stateAtEndPhase.turnNumber + 1,
         phase: PHASES[0],
+        activePlayerId: firstPlayerId,
         journalSelections: {},
         workshopSelections: {},
         workshopPhaseContext: {},

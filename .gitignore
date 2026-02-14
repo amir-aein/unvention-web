@@ -5,3 +5,4 @@ build/
 coverage/
 .vite/
 *.log
+sim/output/
