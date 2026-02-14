@@ -127,6 +127,7 @@
       ],
     },
   ];
+  const FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING = true;
   const WORKSHOP_LAYOUTS = [
     [
       [5, 3, 5, 4, 2],
@@ -235,6 +236,42 @@
       });
     }
 
+    hasTool(playerId, toolRef) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      if (!player) {
+        return false;
+      }
+      const catalog = this.getDefaultToolCatalog();
+      const byId = new Map(catalog.map((tool) => [tool.id, tool]));
+      const byName = new Map(catalog.map((tool) => [String(tool.name).toLowerCase(), tool]));
+      const tool =
+        byId.get(String(toolRef || "")) ||
+        byName.get(String(toolRef || "").toLowerCase()) ||
+        null;
+      if (!tool) {
+        return false;
+      }
+      if (FORCE_ALL_TOOLS_UNLOCKED_FOR_TESTING) {
+        return true;
+      }
+      const unlocked = Array.isArray(player.unlockedTools) ? player.unlockedTools : [];
+      return unlocked.some((item) => String(item.id) === String(tool.id));
+    }
+
+    getActiveTools(playerId) {
+      const state = this.gameStateService.getState();
+      const player = this.findPlayer(state, playerId);
+      const unlockedById = new Map(
+        (Array.isArray(player?.unlockedTools) ? player.unlockedTools : []).map((tool) => [String(tool.id), tool]),
+      );
+      return this.getDefaultToolCatalog().map((tool) => ({
+        ...tool,
+        active: this.hasTool(playerId, tool.id),
+        unlock: unlockedById.get(String(tool.id)) || null,
+      }));
+    }
+
     getJournalingOptions(playerId) {
       const state = this.gameStateService.getState();
       const rollState = state.rollAndGroup || {};
@@ -315,8 +352,84 @@
       return Math.max(0, earned - spent);
     }
 
-    getBuildCost(_playerId) {
-      return BUILD_WRENCH_COST;
+    getBuildCost(playerId) {
+      return this.hasTool(playerId, "T2") ? 1 : BUILD_WRENCH_COST;
+    }
+
+    getOrCreateTurnToolUsage(state, playerId) {
+      const usage = state.turnToolUsage?.[playerId];
+      if (usage && typeof usage === "object") {
+        return {
+          ballBearingUsed: Boolean(usage.ballBearingUsed),
+        };
+      }
+      return {
+        ballBearingUsed: false,
+      };
+    }
+
+    getAdjustedNumberChoices(playerId, remainingNumbers) {
+      if (!this.hasTool(playerId, "T3")) {
+        return [];
+      }
+      const state = this.gameStateService.getState();
+      const usage = this.getOrCreateTurnToolUsage(state, playerId);
+      if (usage.ballBearingUsed) {
+        return [];
+      }
+      const values = Array.isArray(remainingNumbers) ? remainingNumbers.map((value) => Number(value)) : [];
+      const seenUsedValues = new Set(values.map((value) => String(value)));
+      const choices = [];
+      const seenAdjusted = new Set();
+      values.forEach((sourceValue) => {
+        [-1, 1].forEach((offset) => {
+          const adjustedValue = sourceValue + offset;
+          if (adjustedValue < 1 || adjustedValue > 6 || adjustedValue === sourceValue) {
+            return;
+          }
+          if (seenUsedValues.has(String(adjustedValue))) {
+            return;
+          }
+          if (seenAdjusted.has(String(adjustedValue))) {
+            return;
+          }
+          seenAdjusted.add(String(adjustedValue));
+          seenUsedValues.add(String(adjustedValue));
+          choices.push({
+            key: "adj-" + String(sourceValue) + "-" + String(adjustedValue),
+            usedValue: adjustedValue,
+            consumeValue: sourceValue,
+            adjusted: true,
+          });
+        });
+      });
+      return choices;
+    }
+
+    getJournalNumberChoices(playerId) {
+      const state = this.gameStateService.getState();
+      const selection = state.journalSelections?.[playerId];
+      const remaining = Array.isArray(selection?.remainingNumbers) ? selection.remainingNumbers : [];
+      const direct = remaining.map((value, index) => ({
+        key: "base-" + String(index) + "-" + String(value),
+        usedValue: Number(value),
+        consumeValue: Number(value),
+        adjusted: false,
+      }));
+      return [...direct, ...this.getAdjustedNumberChoices(playerId, remaining)];
+    }
+
+    getWorkshopNumberChoices(playerId) {
+      const state = this.gameStateService.getState();
+      const selection = state.workshopSelections?.[playerId];
+      const remaining = Array.isArray(selection?.remainingNumbers) ? selection.remainingNumbers : [];
+      const direct = remaining.map((value, index) => ({
+        key: "base-" + String(index) + "-" + String(value),
+        usedValue: Number(value),
+        consumeValue: Number(value),
+        adjusted: false,
+      }));
+      return [...direct, ...this.getAdjustedNumberChoices(playerId, remaining)];
     }
 
     selectJournalingGroup(playerId, selectionKey) {
@@ -355,6 +468,11 @@
         remainingNumbers: [...selected.values],
         selectedJournalId: null,
         activeNumber: selected.values[0] || null,
+        activePick: {
+          usedValue: selected.values[0] || null,
+          consumeValue: selected.values[0] || null,
+          adjusted: false,
+        },
         placementsThisTurn: 0,
         journalLocked: false,
       };
@@ -381,7 +499,11 @@
         return state;
       }
 
-      if (playerSelection.selectedJournalId && playerSelection.selectedJournalId !== journalId) {
+      if (
+        !this.hasTool(playerId, "T4") &&
+        playerSelection.selectedJournalId &&
+        playerSelection.selectedJournalId !== journalId
+      ) {
         this.loggerService.logEvent("warn", "Journal selection is locked for this turn", {
           playerId,
           selectedJournalId: playerSelection.selectedJournalId,
@@ -390,12 +512,12 @@
       }
 
       playerSelection.selectedJournalId = journalId;
-      playerSelection.journalLocked = true;
+      playerSelection.journalLocked = !this.hasTool(playerId, "T4");
       selections[playerId] = playerSelection;
       return this.gameStateService.update({ journalSelections: selections });
     }
 
-    selectActiveJournalNumber(playerId, numberValue) {
+    selectActiveJournalNumber(playerId, numberValue, consumeValue, adjustedFlag) {
       const state = this.gameStateService.getState();
       const selections = { ...(state.journalSelections || {}) };
       const playerSelection = selections[playerId];
@@ -404,11 +526,24 @@
       }
 
       const value = Number(numberValue);
-      if (!playerSelection.remainingNumbers.includes(value)) {
+      const consume = Number.isInteger(Number(consumeValue)) ? Number(consumeValue) : value;
+      const adjusted = String(adjustedFlag) === "true";
+      const validChoice = this.getJournalNumberChoices(playerId).find(
+        (choice) =>
+          Number(choice.usedValue) === value &&
+          Number(choice.consumeValue) === consume &&
+          Boolean(choice.adjusted) === adjusted,
+      );
+      if (!validChoice) {
         return state;
       }
 
       playerSelection.activeNumber = value;
+      playerSelection.activePick = {
+        usedValue: value,
+        consumeValue: consume,
+        adjusted,
+      };
       selections[playerId] = playerSelection;
       return this.gameStateService.update({ journalSelections: selections });
     }
@@ -436,8 +571,13 @@
         selectedGroupValues: [...selected.values],
         remainingNumbers: [...selected.values],
         activeNumber: selected.values[0] || null,
+        activePick: {
+          usedValue: selected.values[0] || null,
+          consumeValue: selected.values[0] || null,
+          adjusted: false,
+        },
         selectedWorkshopId: existing.selectedWorkshopId || null,
-        workshopLocked: Boolean(existing.selectedWorkshopId),
+        workshopLocked: !this.hasTool(playerId, "T4") && Boolean(existing.selectedWorkshopId),
         placementsThisTurn: existing.placementsThisTurn || 0,
       };
       const updated = this.gameStateService.update({ workshopSelections: selections });
@@ -448,7 +588,7 @@
       return updated;
     }
 
-    selectActiveWorkshopNumber(playerId, numberValue) {
+    selectActiveWorkshopNumber(playerId, numberValue, consumeValue, adjustedFlag) {
       const state = this.gameStateService.getState();
       const selections = { ...(state.workshopSelections || {}) };
       const playerSelection = selections[playerId];
@@ -456,10 +596,23 @@
         return state;
       }
       const value = Number(numberValue);
-      if (!Array.isArray(playerSelection.remainingNumbers) || !playerSelection.remainingNumbers.includes(value)) {
+      const consume = Number.isInteger(Number(consumeValue)) ? Number(consumeValue) : value;
+      const adjusted = String(adjustedFlag) === "true";
+      const validChoice = this.getWorkshopNumberChoices(playerId).find(
+        (choice) =>
+          Number(choice.usedValue) === value &&
+          Number(choice.consumeValue) === consume &&
+          Boolean(choice.adjusted) === adjusted,
+      );
+      if (!validChoice) {
         return state;
       }
       playerSelection.activeNumber = value;
+      playerSelection.activePick = {
+        usedValue: value,
+        consumeValue: consume,
+        adjusted,
+      };
       selections[playerId] = playerSelection;
       return this.gameStateService.update({ workshopSelections: selections });
     }
@@ -483,13 +636,19 @@
       }
 
       if (
+        !this.hasTool(playerId, "T4") &&
         selection.selectedWorkshopId &&
         selection.selectedWorkshopId !== workshopId
       ) {
         return { ok: false, reason: "workshop_locked", state };
       }
 
-      const activeNumber = Number(selection.activeNumber);
+      const activePick = selection.activePick || {
+        usedValue: Number(selection.activeNumber),
+        consumeValue: Number(selection.activeNumber),
+        adjusted: false,
+      };
+      const activeNumber = Number(activePick.usedValue);
       const remainingNumbers = Array.isArray(selection.remainingNumbers) ? selection.remainingNumbers : [];
       if (remainingNumbers.length === 0) {
         return { ok: false, reason: "missing_number", state };
@@ -505,10 +664,16 @@
       }
       const valueUsed = cell.kind === "number"
         ? Number(cell.value)
-        : Number.isInteger(activeNumber) && remainingNumbers.includes(activeNumber)
+        : Number.isInteger(activeNumber) && remainingNumbers.includes(Number(activePick.consumeValue))
           ? activeNumber
           : Number(remainingNumbers[0]);
-      if (!Number.isInteger(valueUsed) || !remainingNumbers.includes(valueUsed)) {
+      const consumeValue = cell.kind === "number"
+        ? (activePick.adjusted ? Number(activePick.consumeValue) : Number(cell.value))
+        : Number(activePick.consumeValue);
+      if (activePick.adjusted && Number(valueUsed) !== Number(activePick.usedValue)) {
+        return { ok: false, reason: "number_mismatch", state };
+      }
+      if (!Number.isInteger(valueUsed) || !remainingNumbers.includes(consumeValue)) {
         return { ok: false, reason: "number_mismatch", state };
       }
 
@@ -517,19 +682,32 @@
       workshop.lastWorkedAtTurn = state.turnNumber;
       workshop.lastWorkedAtDay = state.currentDay;
 
+      const turnToolUsage = { ...(state.turnToolUsage || {}) };
+      const usage = this.getOrCreateTurnToolUsage(state, playerId);
+      if (activePick.adjusted) {
+        usage.ballBearingUsed = true;
+      }
+      turnToolUsage[playerId] = usage;
+
       const selections = { ...(state.workshopSelections || {}) };
       selections[playerId] = {
         ...selection,
         selectedWorkshopId: workshopId,
-        workshopLocked: true,
-        remainingNumbers: this.removeSingleValue(remainingNumbers, valueUsed),
+        workshopLocked: !this.hasTool(playerId, "T4"),
+        remainingNumbers: this.removeSingleValue(remainingNumbers, consumeValue),
         placementsThisTurn: Number(selection.placementsThisTurn || 0) + 1,
       };
       selections[playerId].activeNumber = selections[playerId].remainingNumbers[0] || null;
+      selections[playerId].activePick = {
+        usedValue: selections[playerId].activeNumber,
+        consumeValue: selections[playerId].activeNumber,
+        adjusted: false,
+      };
       const updatedPlayers = state.players.map((item) => (item.id === playerId ? player : item));
       const updated = this.gameStateService.update({
         players: updatedPlayers,
         workshopSelections: selections,
+        turnToolUsage,
       });
       this.loggerService.logEvent(
         "info",
@@ -847,6 +1025,59 @@
       return pending || null;
     }
 
+    getOrCreateInventTransform(state, playerId) {
+      const existing = state.inventTransforms?.[playerId];
+      if (existing && typeof existing === "object") {
+        return {
+          rotation: ((Number(existing.rotation) % 4) + 4) % 4,
+          mirrored: Boolean(existing.mirrored),
+        };
+      }
+      return {
+        rotation: 0,
+        mirrored: false,
+      };
+    }
+
+    setInventTransform(playerId, transform) {
+      const state = this.gameStateService.getState();
+      const transforms = { ...(state.inventTransforms || {}) };
+      transforms[playerId] = {
+        rotation: ((Number(transform?.rotation || 0) % 4) + 4) % 4,
+        mirrored: Boolean(transform?.mirrored),
+      };
+      return this.gameStateService.update({ inventTransforms: transforms });
+    }
+
+    rotatePendingMechanismForInvent(playerId, direction) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "invent") {
+        return state;
+      }
+      const delta = direction === "ccw" ? -1 : 1;
+      const current = this.getOrCreateInventTransform(state, playerId);
+      return this.setInventTransform(playerId, {
+        ...current,
+        rotation: current.rotation + delta,
+      });
+    }
+
+    toggleMirrorPendingMechanismForInvent(playerId) {
+      const state = this.gameStateService.getState();
+      if (state.phase !== "invent") {
+        return state;
+      }
+      const current = this.getOrCreateInventTransform(state, playerId);
+      return this.setInventTransform(playerId, {
+        ...current,
+        mirrored: !current.mirrored,
+      });
+    }
+
+    resetPendingMechanismTransform(playerId) {
+      return this.setInventTransform(playerId, { rotation: 0, mirrored: false });
+    }
+
     getMechanismNormalizedShape(path) {
       const points = Array.isArray(path) ? path : [];
       if (points.length === 0) {
@@ -858,6 +1089,54 @@
         row: Number(point.row) - minRow,
         col: Number(point.col) - minCol,
       }));
+    }
+
+    transformMechanismShape(points, transform) {
+      const normalized = this.getMechanismNormalizedShape(points);
+      if (normalized.length === 0) {
+        return [];
+      }
+      const safeRotation = ((Number(transform?.rotation || 0) % 4) + 4) % 4;
+      const mirrored = Boolean(transform?.mirrored);
+      const transformed = normalized.map((point) => {
+        let row = Number(point.row);
+        let col = Number(point.col);
+        if (mirrored) {
+          col = -col;
+        }
+        for (let i = 0; i < safeRotation; i += 1) {
+          const nextRow = col;
+          const nextCol = -row;
+          row = nextRow;
+          col = nextCol;
+        }
+        return { row, col };
+      });
+      return this.getMechanismNormalizedShape(transformed);
+    }
+
+    getPendingMechanismInventShape(playerId) {
+      const state = this.gameStateService.getState();
+      const mechanism = this.getPendingMechanismForInvent(playerId);
+      if (!mechanism) {
+        return {
+          points: [],
+          rotation: 0,
+          mirrored: false,
+          toolActive: false,
+        };
+      }
+      const toolActive = this.hasTool(playerId, "T1");
+      const transform = toolActive
+        ? this.getOrCreateInventTransform(state, playerId)
+        : { rotation: 0, mirrored: false };
+      const points = this.transformMechanismShape(mechanism.path, transform);
+      return {
+        points,
+        rotation: transform.rotation,
+        mirrored: transform.mirrored,
+        toolActive,
+      };
     }
 
     isInventionPatternOpen(invention, row, col) {
@@ -882,17 +1161,21 @@
       if (!invention) {
         return { ok: false, reason: "invalid_invention", cells: [] };
       }
+      if (invention.presentedDay) {
+        return { ok: false, reason: "invention_presented", cells: [] };
+      }
       const mechanism = this.getPendingMechanismForInvent(playerId);
       if (!mechanism) {
         return { ok: false, reason: "missing_mechanism", cells: [] };
       }
-      const normalized = this.getMechanismNormalizedShape(mechanism.path);
-      if (normalized.length === 0) {
+      const shape = this.getPendingMechanismInventShape(playerId);
+      const points = Array.isArray(shape.points) ? shape.points : [];
+      if (points.length === 0) {
         return { ok: false, reason: "invalid_mechanism", cells: [] };
       }
       const baseRow = Number(anchorRow);
       const baseCol = Number(anchorCol);
-      const placementCells = normalized.map((point) => ({
+      const placementCells = points.map((point) => ({
         row: baseRow + Number(point.row),
         col: baseCol + Number(point.col),
       }));
@@ -911,6 +1194,7 @@
         mechanismId: mechanism.id,
         workshopId: mechanism.workshopId,
         ideaCount: Number(mechanism.ideaCount || 0),
+        variantIndex: null,
       };
     }
 
@@ -933,6 +1217,9 @@
         return { ok: false, reason: "invalid_invention", state };
       }
       const invention = inventions[inventionIndex];
+      if (invention.presentedDay) {
+        return { ok: false, reason: "invention_presented", state };
+      }
       const mechanismIndex = (Array.isArray(player.mechanisms) ? player.mechanisms : []).findIndex(
         (item) => item.id === preview.mechanismId,
       );
@@ -967,7 +1254,10 @@
       this.recalculateInventionScoring(player, invention, state.currentDay);
 
       const players = state.players.map((item) => (item.id === player.id ? player : item));
-      const updated = this.gameStateService.update({ players });
+      let updated = this.gameStateService.update({ players });
+      if (this.hasTool(playerId, "T1")) {
+        updated = this.resetPendingMechanismTransform(playerId);
+      }
       this.loggerService.logEvent(
         "info",
         "Player X placed mechanism " + String(mechanism.id) + " into " + String(invention.name),
@@ -1009,6 +1299,9 @@
       const invention = (player.inventions || []).find((item) => item.id === inventionId);
       if (!invention) {
         return { ok: false, reason: "invalid_invention", state };
+      }
+      if (invention.presentedDay) {
+        return { ok: false, reason: "invention_presented", state };
       }
       journal.ideaAssignedToInventionId = invention.id;
       const nextIdeas = Math.min(6, Math.max(1, Number(invention.uniqueIdeasMarked || 1) + 1));
@@ -1136,6 +1429,50 @@
       return variants.sort()[0];
     }
 
+    getMechanismShapeVariants(path, includeRotationsAndMirrors) {
+      const normalized = this.getMechanismNormalizedShape(path);
+      if (normalized.length === 0) {
+        return [];
+      }
+      const toSignature = (points) =>
+        points
+          .slice()
+          .sort((a, b) => (a.row === b.row ? a.col - b.col : a.row - b.row))
+          .map((point) => String(point.row) + ":" + String(point.col))
+          .join("|");
+      const normalizePoints = (points) => {
+        const minRow = Math.min(...points.map((point) => point.row));
+        const minCol = Math.min(...points.map((point) => point.col));
+        return points.map((point) => ({ row: point.row - minRow, col: point.col - minCol }));
+      };
+      if (!includeRotationsAndMirrors) {
+        return [normalized];
+      }
+      const base = normalized.map((point) => ({ row: point.row, col: point.col }));
+      const transforms = [
+        (p) => ({ row: p.row, col: p.col }),
+        (p) => ({ row: p.col, col: -p.row }),
+        (p) => ({ row: -p.row, col: -p.col }),
+        (p) => ({ row: -p.col, col: p.row }),
+        (p) => ({ row: p.row, col: -p.col }),
+        (p) => ({ row: -p.row, col: p.col }),
+        (p) => ({ row: p.col, col: p.row }),
+        (p) => ({ row: -p.col, col: -p.row }),
+      ];
+      const variants = [];
+      const seen = new Set();
+      transforms.forEach((transform) => {
+        const points = normalizePoints(base.map((point) => transform(point)));
+        const signature = toSignature(points);
+        if (seen.has(signature)) {
+          return;
+        }
+        seen.add(signature);
+        variants.push(points);
+      });
+      return variants;
+    }
+
     patternToPoints(patternRows) {
       const rows = Array.isArray(patternRows) ? patternRows.map((row) => String(row)) : [];
       const points = [];
@@ -1164,15 +1501,16 @@
       }
 
       if (
+        !this.hasTool(playerId, "T4") &&
         playerSelection.selectedJournalId &&
         playerSelection.selectedJournalId !== requestedJournalId
       ) {
         return { ok: false, reason: "journal_locked", state };
       }
 
-      if (!playerSelection.selectedJournalId) {
+      if (!playerSelection.selectedJournalId || this.hasTool(playerId, "T4")) {
         playerSelection.selectedJournalId = requestedJournalId;
-        playerSelection.journalLocked = true;
+        playerSelection.journalLocked = !this.hasTool(playerId, "T4");
       }
 
       const journal = player.journals.find((item) => item.id === requestedJournalId);
@@ -1180,7 +1518,13 @@
         return { ok: false, reason: "invalid_journal", state };
       }
 
-      const value = Number(playerSelection.activeNumber);
+      const activePick = playerSelection.activePick || {
+        usedValue: Number(playerSelection.activeNumber),
+        consumeValue: Number(playerSelection.activeNumber),
+        adjusted: false,
+      };
+      const value = Number(activePick.usedValue);
+      const consumeValue = Number(activePick.consumeValue);
       const remainingNumbers = Array.isArray(playerSelection.remainingNumbers)
         ? playerSelection.remainingNumbers
         : [];
@@ -1189,7 +1533,7 @@
         return { ok: false, reason: "missing_number", state };
       }
 
-      if (!remainingNumbers.includes(value)) {
+      if (!remainingNumbers.includes(consumeValue)) {
         return { ok: false, reason: "missing_number", state };
       }
 
@@ -1214,9 +1558,20 @@
         placedAtTurn: state.turnNumber,
         placedAtDay: state.currentDay,
       };
+      const turnToolUsage = { ...(state.turnToolUsage || {}) };
+      const usage = this.getOrCreateTurnToolUsage(state, playerId);
+      if (activePick.adjusted) {
+        usage.ballBearingUsed = true;
+      }
+      turnToolUsage[playerId] = usage;
       this.updateWrenchesForJournal(journal);
-      playerSelection.remainingNumbers = this.removeSingleValue(playerSelection.remainingNumbers, value);
+      playerSelection.remainingNumbers = this.removeSingleValue(playerSelection.remainingNumbers, consumeValue);
       playerSelection.activeNumber = playerSelection.remainingNumbers[0] || null;
+      playerSelection.activePick = {
+        usedValue: playerSelection.activeNumber,
+        consumeValue: playerSelection.activeNumber,
+        adjusted: false,
+      };
       playerSelection.placementsThisTurn += 1;
       selections[playerId] = playerSelection;
       journal.completionStatus = this.isJournalComplete(journal) ? "complete" : "incomplete";
@@ -1229,6 +1584,7 @@
       const updated = this.gameStateService.update({
         players: updatedPlayers,
         journalSelections: selections,
+        turnToolUsage,
       });
 
       this.loggerService.logEvent(
@@ -1980,6 +2336,7 @@
           phase: PHASES[PHASES.length - 1],
           currentDay: dayResolution.finalDay,
           players: stateWithScoring.players,
+          inventTransforms: {},
         });
 
         this.loggerService.logEvent("info", "Day ended", {
@@ -2011,6 +2368,8 @@
           workshopPhaseContext: {},
           buildDrafts: {},
           buildDecisions: {},
+          turnToolUsage: {},
+          inventTransforms: {},
         });
         const prepared = progressed;
 
@@ -2041,6 +2400,8 @@
         workshopPhaseContext: {},
         buildDrafts: {},
         buildDecisions: {},
+        turnToolUsage: {},
+        inventTransforms: {},
       });
       const prepared = nextTurn;
 

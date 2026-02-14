@@ -261,7 +261,7 @@ test('RoundEngineService blocks illegal journal placement conflicts', () => {
   assert.equal(blocked.reason, 'row_conflict');
 });
 
-test('RoundEngineService locks journaling group and journal after journal selection', () => {
+test('RoundEngineService allows journaling across journals with Reamer active', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
   harness.engine.ensureJournalRoll();
@@ -273,7 +273,8 @@ test('RoundEngineService locks journaling group and journal after journal select
 
   const selection = harness.getState().journalSelections.P1;
   assert.equal(selection.selectedGroupKey, 'group-0');
-  assert.equal(selection.selectedJournalId, 'J1');
+  assert.equal(selection.selectedJournalId, 'J2');
+  assert.equal(selection.journalLocked, false);
 });
 
 test('RoundEngineService awards row and column wrenches when completed', () => {
@@ -392,7 +393,85 @@ test('RoundEngineService allows the same number in workshop after eureka journal
   assert.equal(includesThree, true);
 });
 
-test('RoundEngineService applies workshop selection per clicked part and locks workshop', () => {
+test('RoundEngineService applies Flywheel build cost reduction when tool is active', () => {
+  const harness = createHarness();
+  harness.engine.initializePlayers(['P1']);
+  assert.equal(harness.engine.getBuildCost('P1'), 1);
+});
+
+test('RoundEngineService allows one Ball Bearing ±1 pick per turn', () => {
+  const harness = createHarness({
+    phase: 'journal',
+    rollAndGroup: {
+      dice: [2, 2, 5, 5, 6],
+      outcomeType: 'two_groups',
+      groups: [[2, 2], [5, 5, 6]],
+      rolledAtTurn: 1,
+      rolledAtDay: 'Friday',
+    },
+  });
+  harness.engine.initializePlayers(['P1']);
+  harness.engine.selectJournalingGroup('P1', 'group-0');
+  harness.engine.selectJournal('P1', 'J1');
+  harness.engine.selectActiveJournalNumber('P1', 1, 2, 'true');
+  const placed = harness.engine.placeJournalNumber('P1', 0, 0);
+  assert.equal(placed.ok, true);
+
+  const state = harness.getState();
+  assert.equal(state.turnToolUsage.P1.ballBearingUsed, true);
+  const adjustedChoices = harness.engine.getJournalNumberChoices('P1').filter((choice) => choice.adjusted);
+  assert.equal(adjustedChoices.length, 0);
+});
+
+test('RoundEngineService deduplicates Ball Bearing adjusted options for duplicate dice values', () => {
+  const harness = createHarness({
+    phase: 'workshop',
+    workshopSelections: {
+      P1: {
+        selectedGroupKey: 'group-0',
+        selectedGroupValues: [3, 3],
+        remainingNumbers: [3, 3],
+        activeNumber: 3,
+        activePick: { usedValue: 3, consumeValue: 3, adjusted: false },
+        selectedWorkshopId: null,
+        workshopLocked: false,
+        placementsThisTurn: 0,
+      },
+    },
+  });
+  harness.engine.initializePlayers(['P1']);
+  const choices = harness.engine.getWorkshopNumberChoices('P1');
+  const values = choices.map((choice) => Number(choice.usedValue));
+  assert.deepEqual(values, [3, 3, 2, 4]);
+});
+
+test('RoundEngineService allows rotated mechanism preview in invention with Torque active', () => {
+  const harness = createHarness({ phase: 'invent' });
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const p1 = state.players.find((player) => player.id === 'P1');
+  p1.mechanisms.push({
+    id: 'M1',
+    workshopId: 'W1',
+    path: [{ row: 0, col: 0 }, { row: 0, col: 1 }],
+    edges: ['r0c0-r0c1'],
+    ideaCount: 0,
+    usedInventionId: null,
+    inventionPlacement: null,
+    builtAtTurn: state.turnNumber,
+    builtAtDay: state.currentDay,
+  });
+  harness.engine.gameStateService.update({ players: state.players });
+
+  const beforeRotate = harness.engine.computeInventionPlacementPreview('P1', 'I1', 0, 3);
+  assert.equal(beforeRotate.ok, false);
+  harness.engine.rotatePendingMechanismForInvent('P1', 'cw');
+  const preview = harness.engine.computeInventionPlacementPreview('P1', 'I1', 0, 3);
+  assert.equal(preview.ok, true);
+  assert.equal(preview.cells.length, 2);
+});
+
+test('RoundEngineService allows workshopping across workshops with Reamer active', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
   harness.engine.ensureJournalRoll();
@@ -406,19 +485,20 @@ test('RoundEngineService applies workshop selection per clicked part and locks w
   const result = harness.engine.placeWorkshopPart('P1', 'W2', 1, 0);
   assert.equal(result.ok, true);
 
-  const locked = harness.engine.placeWorkshopPart('P1', 'W1', 4, 0);
-  assert.equal(locked.ok, false);
-  assert.equal(locked.reason, 'workshop_locked');
+  const second = harness.engine.placeWorkshopPart('P1', 'W1', 0, 1);
+  assert.equal(second.ok, true);
 
   const state = harness.getState();
   const workshop = state.players
     .find((player) => player.id === 'P1')
     .workshops.find((item) => item.id === 'W2');
+  const workshopW1 = state.players
+    .find((player) => player.id === 'P1')
+    .workshops.find((item) => item.id === 'W1');
   const selection = state.workshopSelections.P1;
   assert.equal(workshop.partsByNumber['1'].circled, 1);
-  assert.equal(selection.selectedWorkshopId, 'W2');
-  assert.equal(selection.workshopLocked, true);
-  assert.equal(workshop.partsByNumber['5'].circled, 0);
+  assert.equal(workshopW1.partsByNumber['3'].circled, 1);
+  assert.equal(selection.workshopLocked, false);
 });
 
 test('RoundEngineService drafts build path with order-independent adjacency', () => {
@@ -477,7 +557,7 @@ test('RoundEngineService finish building spends wrenches and enforces once per t
   const after = harness.getState();
   const player = after.players.find((item) => item.id === 'P1');
   assert.equal(player.mechanisms.length, 1);
-  assert.equal(player.spentWrenches, 2);
+  assert.equal(player.spentWrenches, 1);
   assert.equal(player.mechanisms[0].edges.length, 1);
   assert.equal(after.buildDrafts.P1, undefined);
 

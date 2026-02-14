@@ -3,6 +3,7 @@
   const container = root.createContainer();
   const MAX_PERSISTED_LOG_ENTRIES = 300;
   const MAX_UNDO_SNAPSHOTS = 20;
+  const MAX_PERSISTED_UNDO_SNAPSHOTS = 6;
   const MAX_SNAPSHOT_LOG_ENTRIES = 80;
   const ROLL_PHASE_DURATION_MS = 4000;
   const loggerService = container.loggerService;
@@ -11,7 +12,7 @@
   const loadedState = gameStateService.load();
   const undoStack = Array.isArray(loadedState.undoHistory)
     ? loadedState.undoHistory
-        .slice(-MAX_UNDO_SNAPSHOTS)
+        .slice(-MAX_PERSISTED_UNDO_SNAPSHOTS)
         .map((snapshot) => ({
           state: snapshot?.state || {},
           logs: Array.isArray(snapshot?.logs)
@@ -43,6 +44,7 @@
   let rollPhaseKey = "";
   let rollPhaseStartedAt = 0;
   let workspaceScrollBound = false;
+  let renderRecoveryInProgress = false;
 
   function isGameStarted(state) {
     return Boolean(state && state.gameStarted);
@@ -63,6 +65,35 @@
     }
   }
 
+  function recoverFromRenderCrash(error) {
+    if (renderRecoveryInProgress) {
+      return;
+    }
+    renderRecoveryInProgress = true;
+    try {
+      clearRollPhaseTimers();
+      undoStack.length = 0;
+      loggerService.clear();
+      gameStateService.reset();
+      roundEngineService.initializePlayers(["P1"]);
+      loggerService.logEvent(
+        "error",
+        "Recovered from a corrupted session after a render failure; returned to New Game",
+        {
+          source: "system",
+          detail: String(error?.message || error),
+        },
+      );
+      setGameSurfaceVisibility(false);
+    } catch (recoveryError) {
+      if (typeof globalScope.console !== "undefined" && typeof globalScope.console.error === "function") {
+        globalScope.console.error("Render recovery failed", recoveryError);
+      }
+    } finally {
+      renderRecoveryInProgress = false;
+    }
+  }
+
   function createSnapshot() {
     const snapshotState = gameStateService.getState();
     delete snapshotState.undoHistory;
@@ -76,7 +107,7 @@
 
   function persistUndoHistory() {
     const compactUndoHistory = undoStack
-      .slice(-MAX_UNDO_SNAPSHOTS)
+      .slice(-MAX_PERSISTED_UNDO_SNAPSHOTS)
       .map((snapshot) => ({
         state: snapshot.state,
         logs: Array.isArray(snapshot.logs)
@@ -98,6 +129,10 @@
 
   function runWithUndo(action) {
     pushUndoSnapshot();
+    action();
+  }
+
+  function runWithoutUndo(action) {
     action();
   }
 
@@ -423,81 +458,91 @@
     if (state.phase !== "invent") {
       return false;
     }
+    if (state.gameStatus === "completed") {
+      return false;
+    }
     const pendingMechanism = typeof roundEngineService.getPendingMechanismForInvent === "function"
       ? roundEngineService.getPendingMechanismForInvent(activePlayerId)
       : null;
     if (pendingMechanism) {
       return false;
     }
-    roundEngineService.advancePhase();
-    return true;
+    const beforeKey = String(state.currentDay) + ":" + String(state.turnNumber) + ":" + String(state.phase) + ":" + String(state.gameStatus);
+    const advanced = roundEngineService.advancePhase();
+    const afterKey = String(advanced?.currentDay) + ":" + String(advanced?.turnNumber) + ":" + String(advanced?.phase) + ":" + String(advanced?.gameStatus);
+    return afterKey !== beforeKey;
   }
 
   function renderState() {
-    const state = roundEngineService.getState();
-    const started = isGameStarted(state);
-    setGameSurfaceVisibility(started);
-    if (!started) {
-      clearRollPhaseTimers();
-      return;
-    }
-    if (typeof roundEngineService.ensurePlayerInventions === "function") {
-      roundEngineService.ensurePlayerInventions();
-    }
-    maybeAutoSelectSingleWorkshopGroup();
-    const withAutoWorkshopState = roundEngineService.getState();
-    if (maybeAutoSkipEmptyInventPhase(withAutoWorkshopState)) {
-      renderState();
-      return;
-    }
-    if (withAutoWorkshopState.phase !== "invent") {
-      inventionHover = null;
-      inventionVarietyHover = null;
-    }
-    const p1 = (withAutoWorkshopState.players || []).find((player) => player.id === activePlayerId);
-    renderPhaseBreadcrumb(withAutoWorkshopState.phase);
-    renderFooterWrenchCount(withAutoWorkshopState);
-    renderPhaseExpectation(withAutoWorkshopState);
-    const advanceButton = document.getElementById("advance-phase");
-    const nextPhaseLabel = getNextPhaseLabel(withAutoWorkshopState);
-    if (advanceButton) {
-      advanceButton.textContent = "Skip";
-      if (typeof advanceButton.setAttribute === "function") {
-        advanceButton.setAttribute("title", nextPhaseLabel);
+    try {
+      const state = roundEngineService.getState();
+      const started = isGameStarted(state);
+      setGameSurfaceVisibility(started);
+      if (!started) {
+        clearRollPhaseTimers();
+        return;
       }
-      advanceButton.style.display = "none";
-    }
-    let disableAdvance = !canAdvancePhase(withAutoWorkshopState);
-    if (advanceButton) {
-      if (withAutoWorkshopState.phase === "roll_and_group") {
-        disableAdvance = true;
+      if (typeof roundEngineService.ensurePlayerInventions === "function") {
+        roundEngineService.ensurePlayerInventions();
       }
-      if (withAutoWorkshopState.phase === "build") {
-        const decision = withAutoWorkshopState.buildDecisions?.[activePlayerId] || "";
-        const draft = withAutoWorkshopState.buildDrafts?.[activePlayerId];
-        if (decision !== "accepted" && (!Array.isArray(draft?.path) || draft.path.length === 0)) {
+      maybeAutoSelectSingleWorkshopGroup();
+      let withAutoWorkshopState = roundEngineService.getState();
+      if (maybeAutoSkipEmptyInventPhase(withAutoWorkshopState)) {
+        renderState();
+        return;
+      }
+      maybeAutoResolveRollPhase(withAutoWorkshopState);
+      withAutoWorkshopState = roundEngineService.getState();
+      if (withAutoWorkshopState.phase !== "invent") {
+        inventionHover = null;
+        inventionVarietyHover = null;
+      }
+      const p1 = (withAutoWorkshopState.players || []).find((player) => player.id === activePlayerId);
+      renderPhaseBreadcrumb(withAutoWorkshopState.phase);
+      renderFooterWrenchCount(withAutoWorkshopState);
+      renderPhaseExpectation(withAutoWorkshopState);
+      const advanceButton = document.getElementById("advance-phase");
+      const nextPhaseLabel = getNextPhaseLabel(withAutoWorkshopState);
+      if (advanceButton) {
+        advanceButton.textContent = "Skip";
+        if (typeof advanceButton.setAttribute === "function") {
+          advanceButton.setAttribute("title", nextPhaseLabel);
+        }
+        advanceButton.style.display = "none";
+      }
+      let disableAdvance = !canAdvancePhase(withAutoWorkshopState);
+      if (advanceButton) {
+        if (withAutoWorkshopState.phase === "roll_and_group") {
           disableAdvance = true;
         }
+        if (withAutoWorkshopState.phase === "build") {
+          const decision = withAutoWorkshopState.buildDecisions?.[activePlayerId] || "";
+          const draft = withAutoWorkshopState.buildDrafts?.[activePlayerId];
+          if (decision !== "accepted" && (!Array.isArray(draft?.path) || draft.path.length === 0)) {
+            disableAdvance = true;
+          }
+        }
+        if (withAutoWorkshopState.phase === "invent") {
+          disableAdvance = true;
+        }
+        advanceButton.disabled = disableAdvance;
       }
-      if (withAutoWorkshopState.phase === "invent") {
-        disableAdvance = true;
+      const undoButton = document.getElementById("undo-action");
+      if (undoButton) {
+        undoButton.disabled = undoStack.length === 0;
       }
-      advanceButton.disabled = disableAdvance;
+      renderPhaseControls(withAutoWorkshopState);
+      renderPlayerStatePanel(withAutoWorkshopState, p1);
+      renderRoundRoll(withAutoWorkshopState);
+      renderJournals(withAutoWorkshopState, p1);
+      renderWorkshops(withAutoWorkshopState, p1);
+      renderInventions(withAutoWorkshopState, p1);
+      renderToolsPanel(withAutoWorkshopState, p1);
+      maybeAutoScrollToPhaseSection(withAutoWorkshopState);
+      updateActiveAnchorFromScroll();
+    } catch (error) {
+      recoverFromRenderCrash(error);
     }
-    const undoButton = document.getElementById("undo-action");
-    if (undoButton) {
-      undoButton.disabled = undoStack.length === 0;
-    }
-    renderPhaseControls(withAutoWorkshopState);
-    renderPlayerStatePanel(withAutoWorkshopState, p1);
-    renderRoundRoll(withAutoWorkshopState);
-    renderJournals(withAutoWorkshopState, p1);
-    renderWorkshops(withAutoWorkshopState, p1);
-    renderInventions(withAutoWorkshopState, p1);
-    renderToolsPanel(withAutoWorkshopState, p1);
-    maybeAutoScrollToPhaseSection(withAutoWorkshopState);
-    maybeAutoResolveRollPhase(withAutoWorkshopState);
-    updateActiveAnchorFromScroll();
   }
 
   function getSectionIdForPhase(phase) {
@@ -576,16 +621,38 @@
       const pendingMechanism = typeof roundEngineService.getPendingMechanismForInvent === "function"
         ? roundEngineService.getPendingMechanismForInvent(activePlayerId)
         : null;
+      const inventShape = typeof roundEngineService.getPendingMechanismInventShape === "function"
+        ? roundEngineService.getPendingMechanismInventShape(activePlayerId)
+        : { points: [], rotation: 0, mirrored: false, toolActive: false };
+      const shapePreview = renderInventOrientationShape(inventShape.points || []);
+      const orientationControls = inventShape.toolActive
+        ? (
+            '<div class="journal-control-row invent-orientation-row">' +
+            '<button type="button" class="journal-chip" data-action="invent-rotate-cw">↻</button>' +
+            shapePreview +
+            '<button type="button" class="journal-chip" data-action="invent-rotate-ccw">↺</button>' +
+            '<button type="button" class="journal-chip" data-action="invent-mirror">Mirror</button>' +
+            '<button type="button" class="journal-chip journal-chip--group" data-action="invent-confirm">Confirm</button>' +
+            '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
+            "</div>" +
+            ""
+          )
+        : "";
       controls.innerHTML = pendingMechanism
         ? "<div class='journal-control-row'><span class='journal-muted'>Click an invention pattern to place " +
           String(pendingMechanism.id) +
           " (" +
           String(Array.isArray(pendingMechanism.path) ? pendingMechanism.path.length : 0) +
           " parts.</span></div>" +
-          '<div class="journal-control-row">' +
-          '<button type="button" class="journal-chip journal-chip--group" data-action="invent-confirm">Confirm</button>' +
-          '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
-          "</div>"
+          orientationControls +
+          (inventShape.toolActive
+            ? ""
+            : (
+                '<div class="journal-control-row">' +
+                '<button type="button" class="journal-chip journal-chip--group" data-action="invent-confirm">Confirm</button>' +
+                '<button type="button" class="journal-chip" data-action="advance-phase-inline">Skip</button>' +
+                "</div>"
+              ))
         : "<div class='journal-control-row'><span class='journal-muted'>No mechanism available to invent.</span></div>";
       if (controls.style) {
         controls.style.display = "grid";
@@ -663,18 +730,29 @@
             )
             .join("")
         : "<span class='journal-muted'>No workshop options this turn.</span>";
-      const numberButtons = selection?.remainingNumbers?.length
-        ? selection.remainingNumbers
+      const workshopNumberChoices =
+        typeof roundEngineService.getWorkshopNumberChoices === "function"
+          ? roundEngineService.getWorkshopNumberChoices(activePlayerId)
+          : [];
+      const activeWorkshopPick = selection?.activePick || null;
+      const numberButtons = workshopNumberChoices.length
+        ? workshopNumberChoices
             .map(
-              (numberValue, index) =>
+              (choice, index) =>
                 '<button type="button" class="journal-chip journal-chip--number' +
-                (numberValue === selection?.activeNumber && index === selection.remainingNumbers.indexOf(selection?.activeNumber)
+              (Number(choice.usedValue) === Number(activeWorkshopPick?.usedValue) &&
+                Number(choice.consumeValue) === Number(activeWorkshopPick?.consumeValue) &&
+                Boolean(choice.adjusted) === Boolean(activeWorkshopPick?.adjusted)
                   ? " journal-chip--active"
                   : "") +
                 '" data-action="workshop-select-number" data-number="' +
-                String(numberValue) +
+                String(choice.usedValue) +
+                '" data-consume-number="' +
+                String(choice.consumeValue) +
+                '" data-adjusted="' +
+                String(Boolean(choice.adjusted)) +
                 '">' +
-                String(numberValue) +
+                String(choice.usedValue) +
                 "</button>",
             )
             .join("")
@@ -708,7 +786,8 @@
       const pendingJournal = pendingJournalIdeas[0];
       const player = (state.players || []).find((item) => item.id === activePlayerId);
       const inventions = Array.isArray(player?.inventions) ? player.inventions : [];
-      const ideaButtons = inventions
+      const assignableInventions = inventions.filter((invention) => !invention.presentedDay);
+      const ideaButtons = assignableInventions
         .map(
           (invention) =>
             '<button type="button" class="journal-chip journal-chip--group" data-action="assign-journal-idea" data-journal-id="' +
@@ -725,7 +804,7 @@
         pendingJournal.id +
         " before ending Journal phase.</span></div>" +
         '<div class="journal-control-row">' +
-        ideaButtons +
+        (ideaButtons || "<span class='journal-muted'>No eligible inventions (presented inventions cannot be modified).</span>") +
         '<button type="button" class="journal-chip" data-action="advance-phase-inline" disabled>Skip</button>' +
         "</div>";
       if (controls.style) {
@@ -759,18 +838,29 @@
           .join("")
       : "<span class='journal-muted'>No group choices available.</span>";
 
-    const numberButtons = selection?.remainingNumbers?.length
-      ? selection.remainingNumbers
+    const journalNumberChoices =
+      typeof roundEngineService.getJournalNumberChoices === "function"
+        ? roundEngineService.getJournalNumberChoices(activePlayerId)
+        : [];
+    const activePick = selection?.activePick || null;
+    const numberButtons = journalNumberChoices.length
+      ? journalNumberChoices
           .map(
-            (numberValue, index) =>
+            (choice, index) =>
               '<button type="button" class="journal-chip journal-chip--number' +
-              (numberValue === activeNumber && index === selection.remainingNumbers.indexOf(activeNumber)
+              (Number(choice.usedValue) === Number(activePick?.usedValue) &&
+                Number(choice.consumeValue) === Number(activePick?.consumeValue) &&
+                Boolean(choice.adjusted) === Boolean(activePick?.adjusted)
                 ? " journal-chip--active"
                 : "") +
               '" data-action="select-number" data-number="' +
-              String(numberValue) +
+              String(choice.usedValue) +
+              '" data-consume-number="' +
+              String(choice.consumeValue) +
+              '" data-adjusted="' +
+              String(Boolean(choice.adjusted)) +
               '">' +
-              String(numberValue) +
+              String(choice.usedValue) +
               "</button>",
           )
           .join("")
@@ -837,6 +927,18 @@
       return;
     }
     const key = String(state.currentDay) + ":" + String(state.turnNumber);
+    const alreadyRolledForTurn =
+      state.rollAndGroup &&
+      state.rollAndGroup.rolledAtTurn === state.turnNumber &&
+      state.rollAndGroup.rolledAtDay === state.currentDay &&
+      Array.isArray(state.rollAndGroup.dice) &&
+      state.rollAndGroup.dice.length > 0;
+    if (!alreadyRolledForTurn) {
+      if (typeof roundEngineService.rollForJournalPhase === "function") {
+        roundEngineService.rollForJournalPhase(state);
+      }
+      state = roundEngineService.getState();
+    }
     if (rollPhaseKey === key && rollPhaseAutoTimeout) {
       return;
     }
@@ -879,9 +981,11 @@
     const wrenchOverflow = available > 24 ? "<span class='journal-muted'> +" + String(available - 24) + "</span>" : "";
     const totalScore = Number(player?.totalScore || 0);
     const toolScore = Number(player?.toolScore || 0);
-    const unlockedTools = Array.isArray(player?.unlockedTools) ? player.unlockedTools : [];
-    const unlockedToolNames = unlockedTools.length > 0
-      ? unlockedTools.map((tool) => String(tool.name || tool.id || "")).filter(Boolean).join(", ")
+    const activeTools = typeof roundEngineService.getActiveTools === "function"
+      ? roundEngineService.getActiveTools(activePlayerId)
+      : [];
+    const unlockedToolNames = activeTools.length > 0
+      ? activeTools.filter((tool) => tool.active).map((tool) => String(tool.name || tool.id || "")).join(", ")
       : "none";
     const completedJournals = Number(player?.completedJournals || 0);
     const currentDay = String(state?.currentDay || "Friday");
@@ -904,48 +1008,34 @@
     if (!container) {
       return;
     }
-    const catalog = typeof roundEngineService.getDefaultToolCatalog === "function"
-      ? roundEngineService.getDefaultToolCatalog()
+    const catalog = typeof roundEngineService.getActiveTools === "function"
+      ? roundEngineService.getActiveTools(activePlayerId)
       : [];
-    const unlockedById = new Map(
-      (Array.isArray(player?.unlockedTools) ? player.unlockedTools : []).map((item) => [String(item.id), item]),
-    );
     if (catalog.length === 0) {
       container.innerHTML = '<h2>Tools</h2><p class="tools-placeholder">No tools configured.</p>';
       return;
     }
     const cards = catalog
       .map((tool) => {
-        const unlock = unlockedById.get(String(tool.id));
-        const unlocked = Boolean(unlock);
-        const tierText = unlock?.unlockTier === "first" ? "First unlock" : "Later unlock";
-        const pointsText = unlocked
-          ? ("+" + String(Number(unlock?.pointsAwarded || 0)) + " points")
-          : (
-              String(Number(tool.firstUnlockPoints || 0)) +
-              "/" +
-              String(Number(tool.laterUnlockPoints || 0)) +
-              " points"
-            );
+        const unlock = tool.unlock;
+        const unlocked = Boolean(tool.active);
         const shape = renderToolShape(tool.pattern);
         return (
           '<article class="tool-card' +
           (unlocked ? " tool-card--unlocked" : "") +
           '">' +
+          '<div class="tool-card__name">' + String(tool.name) + "</div>" +
           "<div class='tool-card__shape'>" +
           shape.html +
           "</div>" +
-          '<div class="tool-card__head">' +
-          "<strong>" +
-          String(tool.name) +
-          "</strong>" +
-          '<span class="tool-card__status">' +
-          (unlocked ? (tierText + " · " + pointsText) : ("Locked · " + pointsText)) +
-          "</span>" +
+          '<div class="tool-card__vp">VP: ' +
+          String(Number(tool.firstUnlockPoints || 0)) +
+          " / " +
+          String(Number(tool.laterUnlockPoints || 0)) +
+          "</div>" +
           '<span class="tool-card__ability">' +
           String(tool.abilityText || "") +
           "</span>" +
-          "</div>" +
           "</article>"
         );
       })
@@ -998,6 +1088,42 @@
     };
   }
 
+  function renderInventOrientationShape(pointsInput) {
+    const points = Array.isArray(pointsInput) ? pointsInput : [];
+    if (points.length === 0) {
+      return "<span class='journal-muted'>No shape</span>";
+    }
+    const maxRow = Math.max(...points.map((point) => Number(point.row)));
+    const maxCol = Math.max(...points.map((point) => Number(point.col)));
+    const rows = maxRow + 1;
+    const cols = maxCol + 1;
+    const filledKeys = new Set(
+      points.map((point) => String(Number(point.row)) + ":" + String(Number(point.col))),
+    );
+    let html = "";
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const key = String(row) + ":" + String(col);
+        const filled = filledKeys.has(key);
+        const right = filled && filledKeys.has(String(row) + ":" + String(col + 1));
+        const down = filled && filledKeys.has(String(row + 1) + ":" + String(col));
+        html +=
+          '<span class="invent-shape-cell' +
+          (filled ? " invent-shape-cell--filled" : " invent-shape-cell--void") +
+          (right ? " invent-shape-cell--edge-right" : "") +
+          (down ? " invent-shape-cell--edge-down" : "") +
+          '"></span>';
+      }
+    }
+    return (
+      '<span class="invent-shape-preview" style="--invent-shape-cols:' +
+      String(cols) +
+      '">' +
+      html +
+      "</span>"
+    );
+  }
+
   function renderWorkshops(state, player) {
     const container = document.getElementById("workshops-container");
     if (!container) {
@@ -1015,6 +1141,19 @@
       W4: "Mechanical",
     };
     const byId = new Map(player.workshops.map((workshop) => [workshop.id, workshop]));
+    const selection = state.workshopSelections?.[activePlayerId];
+    const allowedWorkshopValues =
+      state.phase === "workshop"
+        ? (
+            typeof roundEngineService.getWorkshopNumberChoices === "function"
+              ? roundEngineService
+                  .getWorkshopNumberChoices(activePlayerId)
+                  .map((choice) => Number(choice.usedValue))
+              : (Array.isArray(selection?.remainingNumbers)
+                  ? selection.remainingNumbers.map((item) => Number(item))
+                  : [])
+          )
+        : [];
     const cardsHtml = workshopOrder
       .map((workshopId) => {
         const workshop = byId.get(workshopId);
@@ -1022,9 +1161,12 @@
           return "";
         }
         const cells = Array.isArray(workshop.cells) ? workshop.cells : [];
-        const selection = state.workshopSelections?.[activePlayerId];
         const selectedWorkshopId = selection?.selectedWorkshopId || "";
-        const workshopLockedOut = Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
+        const hasReamer =
+          typeof roundEngineService.hasTool === "function"
+            ? roundEngineService.hasTool(activePlayerId, "T4")
+            : false;
+        const workshopLockedOut = !hasReamer && Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
         const activeNumber = Number(selection?.activeNumber);
         const buildDraft = state.buildDrafts?.[activePlayerId];
         const isBuildPhase = state.phase === "build";
@@ -1058,9 +1200,6 @@
                   cell.kind === "number" && Number.isInteger(cell.value)
                     ? " workshop-cell--v" + String(cell.value)
                     : "";
-                const allowedWorkshopValues = Array.isArray(selection?.remainingNumbers)
-                  ? selection.remainingNumbers.map((item) => Number(item))
-                  : [];
                 const canMatchActive =
                   state.phase === "workshop" &&
                   selection?.selectedGroupKey &&
@@ -1943,7 +2082,12 @@
 
     if (action === "workshop-select-number") {
       runWithUndo(() => {
-        roundEngineService.selectActiveWorkshopNumber(activePlayerId, Number(target.getAttribute("data-number")));
+        roundEngineService.selectActiveWorkshopNumber(
+          activePlayerId,
+          Number(target.getAttribute("data-number")),
+          Number(target.getAttribute("data-consume-number")),
+          String(target.getAttribute("data-adjusted") || "false"),
+        );
       });
       renderState();
       return;
@@ -2014,11 +2158,45 @@
       return;
     }
 
+    if (action === "invent-rotate-cw") {
+      runWithoutUndo(() => {
+        roundEngineService.rotatePendingMechanismForInvent(activePlayerId, "cw");
+      });
+      renderState();
+      return;
+    }
+
+    if (action === "invent-rotate-ccw") {
+      runWithoutUndo(() => {
+        roundEngineService.rotatePendingMechanismForInvent(activePlayerId, "ccw");
+      });
+      renderState();
+      return;
+    }
+
+    if (action === "invent-mirror") {
+      runWithoutUndo(() => {
+        roundEngineService.toggleMirrorPendingMechanismForInvent(activePlayerId);
+      });
+      renderState();
+      return;
+    }
+
+    if (action === "invent-orientation-reset") {
+      runWithUndo(() => {
+        roundEngineService.resetPendingMechanismTransform(activePlayerId);
+      });
+      renderState();
+      return;
+    }
+
     if (action === "select-number") {
       runWithUndo(() => {
         roundEngineService.selectActiveJournalNumber(
           activePlayerId,
           Number(target.getAttribute("data-number")),
+          Number(target.getAttribute("data-consume-number")),
+          String(target.getAttribute("data-adjusted") || "false"),
         );
       });
       renderState();
@@ -2282,6 +2460,9 @@
   const startupState = roundEngineService.getState();
   if (isGameStarted(startupState)) {
     roundEngineService.initializePlayers(["P1"]);
+  }
+  if (Array.isArray(loadedState.undoHistory) && loadedState.undoHistory.length > MAX_PERSISTED_UNDO_SNAPSHOTS) {
+    persistUndoHistory();
   }
 
   if (loadedState.logs.length === 0) {
