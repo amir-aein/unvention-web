@@ -1513,6 +1513,172 @@
     return lines.join("\n");
   }
 
+  function getDiePipPositions(value) {
+    const normalized = Math.max(1, Math.min(6, Number(value) || 1));
+    if (normalized === 1) {
+      return ["mc"];
+    }
+    if (normalized === 2) {
+      return ["tl", "br"];
+    }
+    if (normalized === 3) {
+      return ["tl", "mc", "br"];
+    }
+    if (normalized === 4) {
+      return ["tl", "tr", "bl", "br"];
+    }
+    if (normalized === 5) {
+      return ["tl", "tr", "mc", "bl", "br"];
+    }
+    return ["tl", "tr", "ml", "mr", "bl", "br"];
+  }
+
+  function renderRoundRollDie(value, index) {
+    const pipMarkup = getDiePipPositions(value)
+      .map((position) => '<span class="round-roll-pip round-roll-pip--' + position + '"></span>')
+      .join("");
+    return (
+      '<span class="round-roll-die" aria-label="Die value ' +
+      String(value) +
+      '" style="--die-index:' +
+      String(index) +
+      ';">' +
+      '<span class="round-roll-die-face">' +
+      pipMarkup +
+      "</span>" +
+      "</span>"
+    );
+  }
+
+  function renderUnknownRoundRollDie(index) {
+    return (
+      '<span class="round-roll-die round-roll-die--unknown" aria-label="Unknown die value" style="--die-index:' +
+      String(index) +
+      ';">' +
+      '<span class="round-roll-die-face">' +
+      '<span class="round-roll-die-question">?</span>' +
+      "</span>" +
+      "</span>"
+    );
+  }
+
+  function isRenderableDieValue(value) {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric >= 1 && numeric <= 6;
+  }
+
+  function renderGroupOptionLabel(option) {
+    const values = Array.isArray(option?.values) ? option.values : [];
+    if (values.length === 0 || !values.every((value) => isRenderableDieValue(value))) {
+      return {
+        isDice: false,
+        markup: String(option?.label || ""),
+      };
+    }
+    return {
+      isDice: true,
+      markup:
+        '<span class="round-roll-dice-tray round-roll-dice-tray--inline">' +
+        values.map((value, index) => renderRoundRollDie(value, index)).join("") +
+        "</span>",
+    };
+  }
+
+  function getDirectDieStates(selectedValues, remainingValues) {
+    const selected = Array.isArray(selectedValues)
+      ? selectedValues.map((value) => Number(value)).filter((value) => isRenderableDieValue(value))
+      : [];
+    const remainingCounts = new Map();
+    (Array.isArray(remainingValues) ? remainingValues : [])
+      .map((value) => Number(value))
+      .filter((value) => isRenderableDieValue(value))
+      .forEach((value) => {
+        const key = String(value);
+        remainingCounts.set(key, Number(remainingCounts.get(key) || 0) + 1);
+      });
+    return selected.map((value, index) => {
+      const key = String(value);
+      const available = Number(remainingCounts.get(key) || 0);
+      if (available > 0) {
+        remainingCounts.set(key, available - 1);
+        return { value, index, used: false };
+      }
+      return { value, index, used: true };
+    });
+  }
+
+  function renderNumberChoiceButtons(config) {
+    const selectedValues = Array.isArray(config?.selectedValues) ? config.selectedValues : [];
+    const remainingValues = Array.isArray(config?.remainingValues) ? config.remainingValues : [];
+    const allChoices = Array.isArray(config?.allChoices) ? config.allChoices : [];
+    const action = String(config?.action || "");
+    const activePick = config?.activePick || null;
+    if (!action) {
+      return "";
+    }
+    const directStates = getDirectDieStates(selectedValues, remainingValues);
+    const directButtons = directStates.map((stateItem) => {
+      const isActive =
+        !stateItem.used &&
+        Number(stateItem.value) === Number(activePick?.usedValue) &&
+        Number(stateItem.value) === Number(activePick?.consumeValue) &&
+        !Boolean(activePick?.adjusted);
+      return (
+        '<button type="button" class="journal-chip journal-chip--number journal-chip--number-die' +
+        (isActive ? " journal-chip--active" : "") +
+        (stateItem.used ? " journal-chip--die-used" : "") +
+        '" data-action="' +
+        action +
+        '" data-number="' +
+        String(stateItem.value) +
+        '" data-consume-number="' +
+        String(stateItem.value) +
+        '" data-adjusted="false" ' +
+        (stateItem.used ? "disabled " : "") +
+        'aria-label="Value ' +
+        String(stateItem.value) +
+        (stateItem.used ? " (used)" : "") +
+        '">' +
+        '<span class="round-roll-dice-tray round-roll-dice-tray--inline">' +
+        renderRoundRollDie(stateItem.value, stateItem.index) +
+        "</span>" +
+        "</button>"
+      );
+    });
+    const adjustedButtons = allChoices
+      .filter((choice) => Boolean(choice?.adjusted))
+      .map((choice, index) => {
+        const isActive =
+          Number(choice.usedValue) === Number(activePick?.usedValue) &&
+          Number(choice.consumeValue) === Number(activePick?.consumeValue) &&
+          Boolean(choice.adjusted) === Boolean(activePick?.adjusted);
+        return (
+          '<button type="button" class="journal-chip journal-chip--number journal-chip--number-die journal-chip--number-adjusted' +
+          (isActive ? " journal-chip--active" : "") +
+          '" data-action="' +
+          action +
+          '" data-number="' +
+          String(choice.usedValue) +
+          '" data-consume-number="' +
+          String(choice.consumeValue) +
+          '" data-adjusted="true" title="Ball Bearing: uses ' +
+          String(choice.consumeValue) +
+          ' as ' +
+          String(choice.usedValue) +
+          '" aria-label="Adjusted value ' +
+          String(choice.usedValue) +
+          '">' +
+          '<span class="round-roll-dice-tray round-roll-dice-tray--inline">' +
+          renderRoundRollDie(choice.usedValue, index) +
+          "</span>" +
+          '<span class="journal-chip-adjusted-badge">+</span>' +
+          "</button>"
+        );
+      });
+    const markup = directButtons.concat(adjustedButtons).join("");
+    return markup || "<span class='journal-muted'>No numbers remaining.</span>";
+  }
+
   function renderRoundRoll(state) {
     const container = document.getElementById("round-roll-container");
     const title = document.getElementById("round-roll-title");
@@ -1524,7 +1690,6 @@
     }
     const dice = Array.isArray(state.rollAndGroup?.dice) ? state.rollAndGroup.dice : [];
     const groups = Array.isArray(state.rollAndGroup?.groups) ? state.rollAndGroup.groups : [];
-    const outcomeType = String(state.rollAndGroup?.outcomeType || "");
     if (dice.length === 0) {
       container.innerHTML = "<span class='journal-muted'>Waiting for roll and group phase.</span>";
       container.className = "round-roll-container";
@@ -1539,22 +1704,23 @@
       container.className = "round-roll-container round-roll-container--pending";
       return;
     }
-    const diceChips = dice
-      .map((value) => '<span class="round-roll-chip">' + String(value) + "</span>")
-      .join("");
     const groupChips = groups
-      .map((group) => '<span class="round-roll-chip">' + (Array.isArray(group) ? group.join(", ") : "") + "</span>")
+      .map((group, index) => {
+        const safeGroup = Array.isArray(group) ? group : [];
+        const groupLabel = renderGroupOptionLabel({
+          values: safeGroup,
+          label: safeGroup.join(", "),
+        });
+        if (groupLabel.isDice) {
+          return '<span class="round-roll-group-chip" aria-label="Group ' + String(index + 1) + '">' + groupLabel.markup + "</span>";
+        }
+        return '<span class="round-roll-chip">' + String(groupLabel.markup) + "</span>";
+      })
       .join("");
     container.innerHTML =
-      '<span class="journal-muted">Dice:</span>' +
-      diceChips +
       '<span class="journal-muted">Groups:</span>' +
       '<span class="round-roll-groups">' +
       groupChips +
-      "</span>" +
-      '<span class="journal-muted">Outcome:</span>' +
-      '<span class="round-roll-chip">' +
-      outcomeType.replaceAll("_", " ") +
       "</span>";
     container.className = "round-roll-container";
   }
@@ -2074,9 +2240,6 @@
         Array.isArray(draft?.path) &&
         draft.path.length >= 2;
       controls.innerHTML =
-        (Array.isArray(draft?.path)
-          ? '<div class="journal-control-row"><span class="journal-chip">Draft ' + String(draft.path.length) + " parts</span></div>"
-          : "") +
         '<div class="journal-control-row">' +
         '<button type="button" class="journal-chip journal-chip--group" data-action="finish-building" ' +
         (canFinish ? "" : "disabled") +
@@ -2107,20 +2270,31 @@
         ? (
             '<button type="button" class="journal-chip' +
             (wrenchPickPending ? " journal-chip--active" : "") +
-            '" data-action="workshop-use-wrench">Pay a 🔧 → ?</button>'
+            '" data-action="workshop-use-wrench">Pay a 🔧 → ' +
+            '<span class="round-roll-dice-tray round-roll-dice-tray--inline">' +
+            renderUnknownRoundRollDie(0) +
+            "</span>" +
+            "</button>"
           )
         : "";
       const groupButtons = options.length > 0
         ? options
             .map(
-              (option) =>
+              (option) => {
+                const label = renderGroupOptionLabel(option);
+                return (
                 '<button type="button" class="journal-chip journal-chip--group' +
+                (label.isDice ? " journal-chip--group-dice" : "") +
                 (option.key === selectedGroupKey ? " journal-chip--active" : "") +
                 '" data-action="workshop-select-group" data-group-key="' +
                 option.key +
+                '" aria-label="' +
+                String(option.label || "") +
                 '">' +
-                option.label +
-                "</button>",
+                label.markup +
+                "</button>"
+                );
+              },
             )
             .join("")
         : "<span class='journal-muted'>No workshop options this turn.</span>";
@@ -2129,28 +2303,13 @@
           ? roundEngineService.getWorkshopNumberChoices(activePlayerId)
           : [];
       const activeWorkshopPick = selection?.activePick || null;
-      const numberButtons = workshopNumberChoices.length
-        ? workshopNumberChoices
-            .map(
-              (choice, index) =>
-                '<button type="button" class="journal-chip journal-chip--number' +
-              (Number(choice.usedValue) === Number(activeWorkshopPick?.usedValue) &&
-                Number(choice.consumeValue) === Number(activeWorkshopPick?.consumeValue) &&
-                Boolean(choice.adjusted) === Boolean(activeWorkshopPick?.adjusted)
-                  ? " journal-chip--active"
-                  : "") +
-                '" data-action="workshop-select-number" data-number="' +
-                String(choice.usedValue) +
-                '" data-consume-number="' +
-                String(choice.consumeValue) +
-                '" data-adjusted="' +
-                String(Boolean(choice.adjusted)) +
-                '">' +
-                String(choice.usedValue) +
-                "</button>",
-            )
-            .join("")
-        : "<span class='journal-muted'>No numbers remaining.</span>";
+      const numberButtons = renderNumberChoiceButtons({
+        selectedValues: selection?.selectedGroupValues,
+        remainingValues: selection?.remainingNumbers,
+        allChoices: workshopNumberChoices,
+        activePick: activeWorkshopPick,
+        action: "workshop-select-number",
+      });
 
       let html = "";
       if (isEurekaWorkshop) {
@@ -2224,18 +2383,25 @@
     const groupButtons = options.length > 0
       ? options
           .map(
-            (option) =>
+            (option) => {
+              const label = renderGroupOptionLabel(option);
+              return (
               '<button type="button" class="journal-chip' +
               " journal-chip--group" +
+              (label.isDice ? " journal-chip--group-dice" : "") +
               (option.key === selectedGroupKey ? " journal-chip--active" : "") +
               (groupLocked && option.key !== selectedGroupKey ? " journal-chip--disabled" : "") +
               '" data-action="select-group" data-group-key="' +
               option.key +
+              '" aria-label="' +
+              String(option.label || "") +
               '" ' +
               (groupLocked && option.key !== selectedGroupKey ? "disabled" : "") +
               '">' +
-              option.label +
-              "</button>",
+              label.markup +
+              "</button>"
+              );
+            },
           )
           .join("")
       : "<span class='journal-muted'>No group choices available.</span>";
@@ -2245,28 +2411,13 @@
         ? roundEngineService.getJournalNumberChoices(activePlayerId)
         : [];
     const activePick = selection?.activePick || null;
-    const numberButtons = journalNumberChoices.length
-      ? journalNumberChoices
-          .map(
-            (choice, index) =>
-              '<button type="button" class="journal-chip journal-chip--number' +
-              (Number(choice.usedValue) === Number(activePick?.usedValue) &&
-                Number(choice.consumeValue) === Number(activePick?.consumeValue) &&
-                Boolean(choice.adjusted) === Boolean(activePick?.adjusted)
-                ? " journal-chip--active"
-                : "") +
-              '" data-action="select-number" data-number="' +
-              String(choice.usedValue) +
-              '" data-consume-number="' +
-              String(choice.consumeValue) +
-              '" data-adjusted="' +
-              String(Boolean(choice.adjusted)) +
-              '">' +
-              String(choice.usedValue) +
-              "</button>",
-          )
-          .join("")
-      : "<span class='journal-muted'>No numbers remaining.</span>";
+    const numberButtons = renderNumberChoiceButtons({
+      selectedValues: selection?.selectedGroupValues,
+      remainingValues: selection?.remainingNumbers,
+      allChoices: journalNumberChoices,
+      activePick,
+      action: "select-number",
+    });
 
     if (state.rollAndGroup?.outcomeType === "quantum_leap") {
       controls.innerHTML =
@@ -3681,8 +3832,12 @@
     if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
       return;
     }
+    const actionTarget = target.closest("[data-action]");
+    if (!actionTarget) {
+      return;
+    }
 
-    const action = target.getAttribute("data-action");
+    const action = actionTarget.getAttribute("data-action");
     if (action === "mp-start-lobby") {
       logPlayerAction("Started room game", { action });
       multiplayerClient.send("start_game");
@@ -3723,7 +3878,7 @@
 
     if (action === "select-group") {
       runWithUndo(() => {
-        roundEngineService.selectJournalingGroup(activePlayerId, target.getAttribute("data-group-key"));
+        roundEngineService.selectJournalingGroup(activePlayerId, actionTarget.getAttribute("data-group-key"));
       });
       renderState();
       return;
@@ -3731,7 +3886,7 @@
 
     if (action === "workshop-select-group") {
       runWithUndo(() => {
-        roundEngineService.selectWorkshoppingGroup(activePlayerId, target.getAttribute("data-group-key"));
+        roundEngineService.selectWorkshoppingGroup(activePlayerId, actionTarget.getAttribute("data-group-key"));
       });
       renderState();
       return;
@@ -3741,9 +3896,9 @@
       runWithUndo(() => {
         roundEngineService.selectActiveWorkshopNumber(
           activePlayerId,
-          Number(target.getAttribute("data-number")),
-          Number(target.getAttribute("data-consume-number")),
-          String(target.getAttribute("data-adjusted") || "false"),
+          Number(actionTarget.getAttribute("data-number")),
+          Number(actionTarget.getAttribute("data-consume-number")),
+          String(actionTarget.getAttribute("data-adjusted") || "false"),
         );
       });
       renderState();
@@ -3774,8 +3929,8 @@
       runWithUndo(() => {
         roundEngineService.assignJournalIdeaToInvention(
           activePlayerId,
-          String(target.getAttribute("data-journal-id") || ""),
-          String(target.getAttribute("data-invention-id") || ""),
+          String(actionTarget.getAttribute("data-journal-id") || ""),
+          String(actionTarget.getAttribute("data-invention-id") || ""),
         );
         maybeAutoAdvanceAfterJournalProgress();
       });
@@ -3875,9 +4030,9 @@
       runWithUndo(() => {
         roundEngineService.selectActiveJournalNumber(
           activePlayerId,
-          Number(target.getAttribute("data-number")),
-          Number(target.getAttribute("data-consume-number")),
-          String(target.getAttribute("data-adjusted") || "false"),
+          Number(actionTarget.getAttribute("data-number")),
+          Number(actionTarget.getAttribute("data-consume-number")),
+          String(actionTarget.getAttribute("data-adjusted") || "false"),
         );
       });
       renderState();
