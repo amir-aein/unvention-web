@@ -5,8 +5,8 @@
   const MAX_UNDO_SNAPSHOTS = 20;
   const MAX_PERSISTED_UNDO_SNAPSHOTS = 6;
   const MAX_SNAPSHOT_LOG_ENTRIES = 80;
-  const ROLL_REVEAL_DELAY_MS = 1000;
-  const ROLL_REVEAL_SLIDE_MS = 420;
+  const ROLL_REVEAL_DELAY_MS = 0;
+  const ROLL_REVEAL_SLIDE_MS = 620;
   const loggerService = container.loggerService;
   const gameStateService = container.gameStateService;
   const roundEngineService = container.roundEngineService;
@@ -39,7 +39,7 @@
   const activePlayerId = "P1";
   let inventionHover = null;
   let inventionVarietyHover = null;
-  let lastAutoScrolledPhase = "";
+  let lastAutoScrollTarget = "";
   let rollPhaseRevealTimeout = null;
   let rollPhaseAdvanceTimeout = null;
   let rollPhaseKey = "";
@@ -219,6 +219,9 @@
   function getPhaseExpectation(state) {
     if (!state || state.gameStatus === "completed") {
       return "Game completed.";
+    }
+    if (pendingToolUnlocks.length > 0) {
+      return "Review unlocked tool and confirm.";
     }
     const pendingJournalIdeas = typeof roundEngineService.getPendingJournalIdeaJournals === "function"
       ? roundEngineService.getPendingJournalIdeaJournals(activePlayerId)
@@ -500,6 +503,7 @@
       setGameSurfaceVisibility(started);
       if (!started) {
         clearRollPhaseTimers();
+        lastAutoScrollTarget = "";
         pendingToolUnlocks = [];
         return;
       }
@@ -568,6 +572,9 @@
 
   function getSectionIdForPhase(phase) {
     const state = roundEngineService.getState();
+    if (pendingToolUnlocks.length > 0) {
+      return "tools-panel";
+    }
     const pendingIdeas = typeof roundEngineService.getPendingJournalIdeaJournals === "function"
       ? roundEngineService.getPendingJournalIdeaJournals(activePlayerId)
       : [];
@@ -594,10 +601,10 @@
     if (!nextSectionId) {
       return;
     }
-    if (lastAutoScrolledPhase === state.phase) {
+    if (lastAutoScrollTarget === nextSectionId) {
       return;
     }
-    lastAutoScrolledPhase = state.phase;
+    lastAutoScrollTarget = nextSectionId;
     const section = document.getElementById(nextSectionId);
     if (!section || typeof section.scrollIntoView !== "function") {
       return;
@@ -620,12 +627,18 @@
     }
 
     if (pendingToolUnlocks.length > 0) {
-      const unlockedNames = pendingToolUnlocks.map((tool) => String(tool?.name || "")).filter(Boolean);
+      const message = pendingToolUnlocks
+        .map((tool) => {
+          const name = String(tool?.name || "new tool");
+          const ability = String(tool?.abilityText || "").trim();
+          return ability ? ("You unlocked " + name + ". " + ability) : ("You unlocked " + name + ".");
+        })
+        .join(" ");
       controls.innerHTML =
         "<div class='journal-control-row'><strong>Tool unlocked</strong></div>" +
-        "<div class='journal-control-row'><span class='journal-muted'>You unlocked " +
-        (unlockedNames.length > 0 ? unlockedNames.join(", ") : "a new tool") +
-        ".</span></div>" +
+        "<div class='journal-control-row'><span class='journal-muted'>" +
+        message +
+        "</span></div>" +
         '<div class="journal-control-row">' +
         '<button type="button" class="journal-chip journal-chip--group" data-action="confirm-tool-unlock">Confirm</button>' +
         "</div>";
@@ -1002,6 +1015,7 @@
     if (pendingToolUnlocks.length === 0) {
       return;
     }
+    lastAutoScrollTarget = "";
     pendingToolUnlocks = [];
     const state = roundEngineService.getState();
     if (state.phase === "build") {
@@ -1017,7 +1031,15 @@
       ? buildResult.unlockedTools
       : [];
     if (unlocked.length > 0) {
-      pendingToolUnlocks = unlocked;
+      const activeTools = typeof roundEngineService.getActiveTools === "function"
+        ? roundEngineService.getActiveTools(activePlayerId)
+        : [];
+      const toolById = new Map(activeTools.map((tool) => [String(tool.id), tool]));
+      pendingToolUnlocks = unlocked.map((unlock) => ({
+        ...unlock,
+        abilityText: String(toolById.get(String(unlock.id))?.abilityText || ""),
+      }));
+      lastAutoScrollTarget = "";
       return;
     }
     const current = roundEngineService.getState();
@@ -1062,6 +1084,12 @@
     const unlockedToolNames = activeTools.length > 0
       ? activeTools.filter((tool) => tool.active).map((tool) => String(tool.name || tool.id || "")).join(", ")
       : "none";
+    const unlockedToolDescriptions = activeTools.length > 0
+      ? activeTools
+          .filter((tool) => tool.active)
+          .map((tool) => String(tool.name || tool.id || "") + ": " + String(tool.abilityText || ""))
+          .join(" | ")
+      : "none";
     const completedJournals = Number(player?.completedJournals || 0);
     const currentDay = String(state?.currentDay || "Friday");
     summary.innerHTML =
@@ -1072,6 +1100,7 @@
       "<div><strong>Tool score:</strong> " + String(toolScore) + "</div>" +
       "<div><strong>Completed journals:</strong> " + String(completedJournals) + "/3</div>" +
       "<div><strong>Tools unlocked:</strong> " + unlockedToolNames + "</div>" +
+      "<div><strong>Tool effects:</strong> " + unlockedToolDescriptions + "</div>" +
       "</div>" +
       "<div class='summary-wrench-box'><strong>Wrenches</strong><span class='summary-wrenches'>" + wrenchTokens + wrenchOverflow + "</span></div>" +
       "</div>" +
@@ -1310,7 +1339,9 @@
                     (draftWorkshopId === "" && draftPath.length === 0) ||
                     (isDraftWorkshop && (onDraftPath || adjacentToDraft))
                   );
-                const isDisabled = isBuildPhase ? !canBuildSelect : (!cell.circled && !canMatchActive);
+                const isDisabled = isBuildPhase
+                  ? (!canBuildSelect && !inCommittedMechanism)
+                  : (!cell.circled && !canMatchActive);
                 const shouldVisuallyDim = isBuildPhase
                   ? (!canBuildSelect && !cell.circled && !onDraftPath && !inCommittedMechanism)
                   : (!cell.circled && !canMatchActive);
