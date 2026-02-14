@@ -149,6 +149,10 @@ function handleClientMessage(ws, message) {
     sendRoomStateToConnection(ws);
     return;
   }
+  if (type === "rename_player") {
+    onRenamePlayer(ws, message);
+    return;
+  }
   if (type === "heartbeat") {
     send(ws, "heartbeat_ack", { serverTime: Date.now() });
     return;
@@ -214,7 +218,18 @@ function onJoinRoom(ws, message) {
   const reconnectToken = String(message?.reconnectToken || "");
   if (reconnectToken) {
     const player = room.players.find((item) => item.reconnectToken === reconnectToken);
-    if (player && !player.connected && Date.now() <= Number(player.canReconnectUntil || 0)) {
+    if (player && Date.now() <= Number(player.canReconnectUntil || 0)) {
+      const previousConnectionId = String(player.connectionId || "");
+      if (previousConnectionId && previousConnectionId !== ws.meta.connectionId) {
+        const previousSocket = connectionsById.get(previousConnectionId);
+        if (previousSocket) {
+          previousSocket.meta.roomCode = null;
+          previousSocket.meta.playerId = null;
+          try {
+            previousSocket.close(4001, "Reconnected from another tab");
+          } catch (_error) {}
+        }
+      }
       player.connected = true;
       player.connectionId = ws.meta.connectionId;
       player.lastSeenAt = Date.now();
@@ -271,6 +286,32 @@ function onLeaveRoom(ws) {
   removePlayer(room, playerId, "leave_room");
   ws.meta.roomCode = null;
   ws.meta.playerId = null;
+}
+
+function onRenamePlayer(ws, message) {
+  const room = getRoomForConnection(ws);
+  if (!room) {
+    send(ws, "error", { code: "not_in_room", message: "Join a room first." });
+    return;
+  }
+  const player = room.players.find((item) => item.playerId === ws.meta.playerId);
+  if (!player) {
+    send(ws, "error", { code: "player_not_found", message: "Player is not in room." });
+    return;
+  }
+  const nextName = sanitizeName(message?.name, player.name || "Guest");
+  if (nextName === player.name) {
+    broadcastRoomState(room);
+    return;
+  }
+  player.name = nextName;
+  player.lastSeenAt = Date.now();
+  room.updatedAt = Date.now();
+  appendActionLog(room.code, "rename_player", {
+    playerId: player.playerId,
+    name: player.name,
+  });
+  broadcastRoomState(room);
 }
 
 function onStartGame(ws) {

@@ -77,6 +77,42 @@ body {
   gap: 0.35rem;
 }
 
+.mode-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mode-toggle__option {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.86rem;
+  line-height: 1.1;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+
+.mode-toggle__option:hover {
+  border-color: #94a3b8;
+  background: #f1f5f9;
+  color: #1f2937;
+}
+
+.mode-toggle__option--active {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.mode-toggle__option--active:hover {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
 .mp-room-directory {
   margin-top: 0.35rem;
   border-top: 1px solid #e2e8f0;

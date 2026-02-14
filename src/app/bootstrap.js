@@ -24,6 +24,7 @@
   const multiplayerClient = new MultiplayerClientCtor();
   const MULTIPLAYER_STORAGE_KEY = "unvention.multiplayer.v1";
   const MULTIPLAYER_SESSION_KEY = "unvention.multiplayer.session.v1";
+  const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
   const loadedState = gameStateService.load();
   const undoStack = Array.isArray(loadedState.undoHistory)
     ? loadedState.undoHistory
@@ -76,6 +77,12 @@
   let roomDirectoryLoading = false;
   let roomDirectoryLastFetchAt = 0;
   let roomDirectoryError = "";
+  let selectedGameMode = "solo";
+  let homeStep = "mode";
+  loadHomeUiState();
+  if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
+    homeStep = "waitroom";
+  }
   const originalLogEvent = loggerService.logEvent.bind(loggerService);
   loggerService.logEvent = function logEventWithTurnCapture(level, message, context) {
     const entry = originalLogEvent(level, message, context);
@@ -124,6 +131,61 @@
 
   function isGameStarted(state) {
     return Boolean(state && state.gameStarted);
+  }
+
+  function isMultiplayerLobbyActive() {
+    return Boolean(multiplayerState.room && multiplayerState.room.code && multiplayerState.room.status === "lobby");
+  }
+
+  function resolveHomeStep() {
+    if (isMultiplayerLobbyActive()) {
+      return "waitroom";
+    }
+    return homeStep;
+  }
+
+  function setHomeStep(nextStep) {
+    homeStep = String(nextStep || "mode");
+    persistHomeUiState();
+    renderMultiplayerUi();
+  }
+
+  function loadHomeUiState() {
+    const localStorageRef = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
+    if (!localStorageRef) {
+      return;
+    }
+    try {
+      const raw = localStorageRef.getItem(HOME_UI_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") {
+        return;
+      }
+      const mode = String(parsed.selectedGameMode || "").trim();
+      const step = String(parsed.homeStep || "").trim();
+      if (mode === "solo" || mode === "first" || mode === "international") {
+        selectedGameMode = mode;
+      }
+      if (step) {
+        homeStep = step;
+      }
+    } catch (_error) {}
+  }
+
+  function persistHomeUiState() {
+    const localStorageRef = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
+    if (!localStorageRef) {
+      return;
+    }
+    try {
+      localStorageRef.setItem(HOME_UI_STORAGE_KEY, JSON.stringify({
+        selectedGameMode,
+        homeStep,
+      }));
+    } catch (_error) {}
   }
 
   function loadMultiplayerState() {
@@ -225,6 +287,8 @@
       sessionStorageRef.removeItem(MULTIPLAYER_SESSION_KEY);
     }
     reconnectAttempts = 0;
+    homeStep = "mode";
+    persistHomeUiState();
   }
 
   function isInteractionBlocked() {
@@ -378,25 +442,20 @@
   }
 
   function renderMultiplayerUi() {
-    const urlInput = document.getElementById("mp-url");
     const nameInput = document.getElementById("mp-name");
-    const roomCodeInput = document.getElementById("mp-room-code");
-    if (urlInput && document.activeElement !== urlInput) {
-      urlInput.value = multiplayerState.url || "";
-    }
+    const waitroomNameInput = document.getElementById("waitroom-name");
     if (nameInput && document.activeElement !== nameInput) {
       nameInput.value = multiplayerState.name || "";
     }
-    if (roomCodeInput && document.activeElement !== roomCodeInput) {
-      roomCodeInput.value = multiplayerState.roomCode || "";
+    if (waitroomNameInput && document.activeElement !== waitroomNameInput) {
+      waitroomNameInput.value = multiplayerState.name || "";
     }
-
     const connectionNode = document.getElementById("mp-connection-status");
     if (connectionNode) {
       connectionNode.textContent = summarizeMultiplayerStatus();
     }
-    const roomStatusNode = document.getElementById("mp-room-status");
     const room = multiplayerState.room;
+    const roomStatusNode = document.getElementById("mp-room-status");
     if (roomStatusNode) {
       if (!room) {
         roomStatusNode.textContent = "No room joined.";
@@ -410,6 +469,15 @@
           "Room " + String(room.code) + " | " + String(room.status || "lobby") + " | Host " + String(room.hostPlayerId || "-") + waitSuffix;
       }
     }
+    const waitroomStatusNode = document.getElementById("waitroom-status");
+    if (waitroomStatusNode) {
+      if (!room) {
+        waitroomStatusNode.textContent = "No room joined.";
+      } else {
+        waitroomStatusNode.textContent =
+          "Room " + String(room.code) + " | " + String(room.status || "lobby") + " | Host " + String(room.hostPlayerId || "-");
+      }
+    }
     const rollNode = document.getElementById("mp-turn-roll");
     if (rollNode) {
       if (!room) {
@@ -420,39 +488,124 @@
       }
     }
     const playerList = document.getElementById("mp-player-list");
+    const waitroomPlayerTableBody = document.getElementById("waitroom-player-table-body");
+    const players = Array.isArray(room?.players) ? room.players : [];
+    const playerRows = players
+      .map((player) => {
+        const meTag = player.playerId === multiplayerState.playerId ? " (you)" : "";
+        const hostTag = player.playerId === room?.hostPlayerId ? " [host]" : "";
+        const onlineTag = player.connected ? "online" : "offline";
+        const turnTag = player.endedTurn ? "ended" : "playing";
+        return "<li>" + String(player.playerId) + meTag + hostTag + " - " + String(player.name || "Guest") + " - " + onlineTag + " - " + turnTag + "</li>";
+      })
+      .join("");
     if (playerList) {
-      const players = Array.isArray(room?.players) ? room.players : [];
-      playerList.innerHTML = players
-        .map((player) => {
-          const meTag = player.playerId === multiplayerState.playerId ? " (you)" : "";
-          const hostTag = player.playerId === room?.hostPlayerId ? " [host]" : "";
-          const onlineTag = player.connected ? "online" : "offline";
-          const turnTag = player.endedTurn ? "ended" : "playing";
-          return "<li>" + String(player.playerId) + meTag + hostTag + " - " + String(player.name || "Guest") + " - " + onlineTag + " - " + turnTag + "</li>";
-        })
-        .join("");
+      playerList.innerHTML = playerRows;
+    }
+    if (waitroomPlayerTableBody) {
+      const canKick = Boolean(isLocalPlayerHost() && room?.status === "lobby");
+      waitroomPlayerTableBody.innerHTML = players.map((player) => {
+        const isMe = String(player?.playerId || "") === String(multiplayerState.playerId || "");
+        const status = player.connected ? "online" : "offline";
+        const turnTag = player.endedTurn ? "ended" : "playing";
+        const name = String(player.name || player.playerId || "Guest") +
+          (isMe ? " (you)" : "") +
+          (player.playerId === room?.hostPlayerId ? " [host]" : "");
+        const kickButton = canKick && !isMe
+          ? "<button type='button' data-action='waitroom-kick-player' data-player-id='" + String(player.playerId || "") + "'>Kick</button>"
+          : "";
+        return "<tr>" +
+          "<td>" + name + "</td>" +
+          "<td>" + status + "</td>" +
+          "<td>" + turnTag + "</td>" +
+          "<td>" + kickButton + "</td>" +
+          "</tr>";
+      }).join("");
     }
 
     const canRoomAction = Boolean(room && multiplayerState.connected);
     const startButton = document.getElementById("mp-start-game");
-    const syncButton = document.getElementById("mp-sync");
     const leaveButton = document.getElementById("mp-leave-room");
     if (startButton) {
       startButton.disabled = !canRoomAction || room.status !== "lobby" || !isLocalPlayerHost();
     }
-    if (syncButton) {
-      syncButton.disabled = !canRoomAction;
-    }
     if (leaveButton) {
       leaveButton.disabled = !canRoomAction;
-    }
-    const startLocalButton = document.getElementById("start-new-game");
-    if (startLocalButton) {
-      startLocalButton.disabled = hasActiveMultiplayerRoom();
     }
     const resetButton = document.getElementById("reset-game");
     if (resetButton) {
       resetButton.disabled = hasActiveMultiplayerRoom() && !isLocalPlayerHost();
+    }
+    const waitroomStartButton = document.getElementById("waitroom-start-game");
+    const waitroomCancelButton = document.getElementById("waitroom-cancel-room");
+    const waitroomLeaveButton = document.getElementById("waitroom-leave-room");
+    const waitroomUpdateNameButton = document.getElementById("waitroom-update-name");
+    if (waitroomStartButton) {
+      waitroomStartButton.style.display = isLocalPlayerHost() ? "" : "none";
+      waitroomStartButton.disabled = !canRoomAction || room?.status !== "lobby" || !isLocalPlayerHost();
+    }
+    if (waitroomCancelButton) {
+      waitroomCancelButton.style.display = isLocalPlayerHost() ? "" : "none";
+      waitroomCancelButton.disabled = !canRoomAction || !isLocalPlayerHost();
+    }
+    if (waitroomLeaveButton) {
+      waitroomLeaveButton.style.display = !isLocalPlayerHost() ? "" : "none";
+      waitroomLeaveButton.disabled = !canRoomAction;
+    }
+    if (waitroomUpdateNameButton) {
+      waitroomUpdateNameButton.disabled = !canRoomAction;
+    }
+
+    const modeStep = document.getElementById("home-step-mode");
+    const multiplayerStep = document.getElementById("home-step-multiplayer");
+    const roomListStep = document.getElementById("home-step-room-list");
+    const waitroomStep = document.getElementById("home-step-waitroom");
+    const stepLabel = document.getElementById("home-step-label");
+    const effectiveStep = resolveHomeStep();
+    if (modeStep && modeStep.style) {
+      modeStep.style.display = effectiveStep === "mode" ? "grid" : "none";
+    }
+    if (multiplayerStep && multiplayerStep.style) {
+      multiplayerStep.style.display = effectiveStep === "multiplayer" ? "grid" : "none";
+    }
+    if (roomListStep && roomListStep.style) {
+      roomListStep.style.display = effectiveStep === "room-list" ? "grid" : "none";
+    }
+    if (waitroomStep && waitroomStep.style) {
+      waitroomStep.style.display = effectiveStep === "waitroom" ? "grid" : "none";
+    }
+    if (stepLabel) {
+      if (effectiveStep === "mode") {
+        stepLabel.textContent = "Step 1 of 3";
+      } else if (effectiveStep === "multiplayer") {
+        stepLabel.textContent = "Step 2 of 3";
+      } else if (effectiveStep === "room-list") {
+        stepLabel.textContent = "Step 2 of 3 - Join a room";
+      } else {
+        stepLabel.textContent = "Step 3 of 3 - Room Waitroom";
+      }
+    }
+    if (typeof document.querySelectorAll === "function") {
+      const modeButtons = Array.from(document.querySelectorAll("#game-mode-toggle [data-mode]"));
+      modeButtons.forEach((button) => {
+        const mode = String(button.getAttribute("data-mode") || "");
+        button.classList.toggle("mode-toggle__option--active", mode === selectedGameMode);
+      });
+    }
+    const continueButton = document.getElementById("home-mode-continue");
+    const modeHint = document.getElementById("home-mode-hint");
+    if (continueButton) {
+      continueButton.textContent = selectedGameMode === "solo" ? "Start Solo Game" : "Continue";
+      continueButton.disabled = selectedGameMode === "first";
+    }
+    if (modeHint) {
+      if (selectedGameMode === "solo") {
+        modeHint.textContent = "Solo starts immediately.";
+      } else if (selectedGameMode === "first") {
+        modeHint.textContent = "My First Unvention is coming soon.";
+      } else {
+        modeHint.textContent = "Continue to multiplayer setup.";
+      }
     }
     renderRoomDirectory();
   }
@@ -925,6 +1078,8 @@
       multiplayerState.reconnectToken = String(message.reconnectToken || "");
       appliedServerTurnKey = "";
       awaitingRoomStateRecovery = true;
+      homeStep = "waitroom";
+      persistHomeUiState();
       persistMultiplayerState();
       gameStateService.update({ gameStarted: false });
       renderMultiplayerUi();
@@ -942,6 +1097,11 @@
       if (message?.you?.playerId) {
         multiplayerState.playerId = String(message.you.playerId);
         activePlayerId = multiplayerState.playerId || activePlayerId;
+        const meInRoom = (Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [])
+          .find((player) => String(player?.playerId || "") === String(multiplayerState.playerId || ""));
+        if (meInRoom && String(meInRoom.name || "").trim()) {
+          multiplayerState.name = String(meInRoom.name || "").trim();
+        }
       }
       if (message?.you?.reconnectToken) {
         multiplayerState.reconnectToken = String(message.you.reconnectToken);
@@ -950,6 +1110,7 @@
         ? message.you.liveState
         : null;
       persistMultiplayerState();
+      persistHomeUiState();
       if (awaitingRoomStateRecovery && incomingLiveState) {
         const recoveredState = normalizeRecoveredLiveState(incomingLiveState);
         const roomTurn = Number(multiplayerState.room?.turn?.number || 0);
@@ -1043,7 +1204,7 @@
     const newGameScreen = document.getElementById("new-game-screen");
     const appShell = document.getElementById("app-shell");
     const footer = document.getElementById("action-footer");
-    const showGameSurface = Boolean(started || hasActiveMultiplayerRoom());
+    const showGameSurface = Boolean(started);
     if (newGameScreen && newGameScreen.style) {
       newGameScreen.style.display = showGameSurface ? "none" : "grid";
     }
@@ -3307,12 +3468,7 @@
     renderState();
   });
 
-  document.getElementById("start-new-game").addEventListener("click", function onStartNewGame() {
-    if (hasActiveMultiplayerRoom()) {
-      loggerService.logEvent("warn", "Leave multiplayer room to start a local solo game", { source: "ui" });
-      renderMultiplayerUi();
-      return;
-    }
+  function startSoloGame() {
     const input = document.getElementById("new-game-seed");
     const desiredSeed = String(input?.value || "").trim() || generateRandomSeed();
     undoStack.length = 0;
@@ -3324,50 +3480,18 @@
     gameStateService.update({ gameStarted: true });
     loggerService.logEvent("info", "New game started", { seed: desiredSeed, source: "ui" });
     renderState();
-  });
-
-  const mpConnectButton = document.getElementById("mp-connect");
-  if (mpConnectButton) {
-    mpConnectButton.addEventListener("click", async function onConnectMultiplayer() {
-      const urlInput = document.getElementById("mp-url");
-      const nameInput = document.getElementById("mp-name");
-      multiplayerState.url = String(urlInput?.value || "").trim() || "ws://localhost:8080";
-      multiplayerState.name = String(nameInput?.value || "").trim();
-      persistMultiplayerState();
-      await ensureMultiplayerConnection();
-      renderMultiplayerUi();
-      refreshRoomDirectory(true);
-    });
   }
 
-  const mpCreateRoomButton = document.getElementById("mp-create-room");
-  if (mpCreateRoomButton) {
-    mpCreateRoomButton.addEventListener("click", async function onCreateMultiplayerRoom() {
-      const urlInput = document.getElementById("mp-url");
-      const nameInput = document.getElementById("mp-name");
-      multiplayerState.url = String(urlInput?.value || "").trim() || "ws://localhost:8080";
-      multiplayerState.name = String(nameInput?.value || "").trim();
-      multiplayerState.lastError = "";
-      clearMultiplayerSessionIdentity();
-      gameStateService.update({ gameStarted: false });
-      persistMultiplayerState();
-      await ensureMultiplayerConnection();
-      const sent = multiplayerClient.send("create_room", {
-        name: multiplayerState.name || "Host",
-      });
-      if (!sent) {
-        multiplayerState.lastError = "not_connected";
-        renderMultiplayerUi();
-      }
-      refreshRoomDirectory(true);
+  const legacyStartNewGameButton = document.getElementById("start-new-game");
+  if (legacyStartNewGameButton) {
+    legacyStartNewGameButton.addEventListener("click", function onLegacyStartNewGame() {
+      startSoloGame();
     });
   }
 
   async function joinMultiplayerRoomByCode(requestedRoomCodeInput) {
-    const urlInput = document.getElementById("mp-url");
     const nameInput = document.getElementById("mp-name");
     const requestedRoomCode = String(requestedRoomCodeInput || "").trim().toUpperCase();
-    multiplayerState.url = String(urlInput?.value || "").trim() || "ws://localhost:8080";
     multiplayerState.name = String(nameInput?.value || "").trim();
     multiplayerState.lastError = "";
     if (!requestedRoomCode) {
@@ -3392,21 +3516,91 @@
     refreshRoomDirectory(true);
   }
 
-  const mpJoinRoomButton = document.getElementById("mp-join-room");
-  if (mpJoinRoomButton) {
-    mpJoinRoomButton.addEventListener("click", async function onJoinMultiplayerRoom() {
-      const roomCodeInput = document.getElementById("mp-room-code");
-      const requestedRoomCode = String(roomCodeInput?.value || "").trim().toUpperCase();
-      await joinMultiplayerRoomByCode(requestedRoomCode);
+  const modeContinueButton = document.getElementById("home-mode-continue");
+  if (modeContinueButton) {
+    modeContinueButton.addEventListener("click", function onModeContinue() {
+      if (selectedGameMode === "first") {
+        return;
+      }
+      if (selectedGameMode === "solo") {
+        startSoloGame();
+        return;
+      }
+      setHomeStep("multiplayer");
     });
   }
 
-  const mpRefreshRoomsButton = document.getElementById("mp-refresh-rooms");
-  if (mpRefreshRoomsButton) {
-    mpRefreshRoomsButton.addEventListener("click", function onRefreshRooms() {
+  const modeToggle = document.getElementById("game-mode-toggle");
+  if (modeToggle) {
+    modeToggle.addEventListener("click", function onModeToggleClick(event) {
+      const target = event.target;
+      if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
+        return;
+      }
+      const button = target.closest("button[data-mode]");
+      if (!button || button.hasAttribute("disabled")) {
+        return;
+      }
+      selectedGameMode = String(button.getAttribute("data-mode") || "solo");
+      persistHomeUiState();
+      renderMultiplayerUi();
+    });
+  }
+
+  const homeCreateRoomButton = document.getElementById("home-create-room");
+  if (homeCreateRoomButton) {
+    homeCreateRoomButton.addEventListener("click", async function onCreateMultiplayerRoom() {
+      const nameInput = document.getElementById("mp-name");
+      multiplayerState.name = String(nameInput?.value || "").trim();
+      multiplayerState.lastError = "";
+      clearMultiplayerSessionIdentity();
+      gameStateService.update({ gameStarted: false });
+      persistMultiplayerState();
+      await ensureMultiplayerConnection();
+      const sent = multiplayerClient.send("create_room", {
+        name: multiplayerState.name || "Host",
+      });
+      if (!sent) {
+        multiplayerState.lastError = "not_connected";
+      }
+      renderMultiplayerUi();
       refreshRoomDirectory(true);
     });
   }
+
+  const homeJoinRoomStepButton = document.getElementById("home-join-room-step");
+  if (homeJoinRoomStepButton) {
+    homeJoinRoomStepButton.addEventListener("click", async function onJoinRoomStep() {
+      const nameInput = document.getElementById("mp-name");
+      multiplayerState.name = String(nameInput?.value || "").trim();
+      persistMultiplayerState();
+      await ensureMultiplayerConnection();
+      setHomeStep("room-list");
+      refreshRoomDirectory(true);
+    });
+  }
+
+  const homeBackToModeButton = document.getElementById("home-back-to-mode");
+  if (homeBackToModeButton) {
+    homeBackToModeButton.addEventListener("click", function onBackToMode() {
+      setHomeStep("mode");
+    });
+  }
+
+  const homeBackToMultiplayerButton = document.getElementById("home-back-to-multiplayer");
+  if (homeBackToMultiplayerButton) {
+    homeBackToMultiplayerButton.addEventListener("click", function onBackToMultiplayer() {
+      setHomeStep("multiplayer");
+    });
+  }
+
+  const homeRefreshRoomsButton = document.getElementById("home-refresh-rooms");
+  if (homeRefreshRoomsButton) {
+    homeRefreshRoomsButton.addEventListener("click", function onRefreshRooms() {
+      refreshRoomDirectory(true);
+    });
+  }
+
   const mpRoomDirectory = document.getElementById("mp-room-directory");
   if (mpRoomDirectory) {
     mpRoomDirectory.addEventListener("click", function onRoomDirectoryClick(event) {
@@ -3422,10 +3616,6 @@
       if (!roomCode) {
         return;
       }
-      const roomCodeInput = document.getElementById("mp-room-code");
-      if (roomCodeInput) {
-        roomCodeInput.value = roomCode;
-      }
       joinMultiplayerRoomByCode(roomCode);
     });
   }
@@ -3434,13 +3624,6 @@
   if (mpStartGameButton) {
     mpStartGameButton.addEventListener("click", function onStartRoomGame() {
       multiplayerClient.send("start_game");
-    });
-  }
-
-  const mpSyncButton = document.getElementById("mp-sync");
-  if (mpSyncButton) {
-    mpSyncButton.addEventListener("click", function onSyncRoomState() {
-      multiplayerClient.send("request_sync");
     });
   }
 
@@ -3455,6 +3638,85 @@
       }
       multiplayerClient.send("leave_room");
       teardownMultiplayerSession("Left multiplayer room");
+    });
+  }
+
+  const waitroomUpdateNameButton = document.getElementById("waitroom-update-name");
+  if (waitroomUpdateNameButton) {
+    waitroomUpdateNameButton.addEventListener("click", function onUpdateWaitroomName() {
+      const waitroomNameInput = document.getElementById("waitroom-name");
+      const nextName = String(waitroomNameInput?.value || "").trim();
+      if (!nextName) {
+        return;
+      }
+      multiplayerState.name = nextName;
+      persistMultiplayerState();
+      if (hasActiveMultiplayerRoom()) {
+        multiplayerClient.send("rename_player", { name: nextName });
+      }
+      renderMultiplayerUi();
+    });
+  }
+
+  const waitroomStartGameButton = document.getElementById("waitroom-start-game");
+  if (waitroomStartGameButton) {
+    waitroomStartGameButton.addEventListener("click", function onStartWaitroomGame() {
+      multiplayerClient.send("start_game");
+    });
+  }
+
+  const waitroomCancelRoomButton = document.getElementById("waitroom-cancel-room");
+  if (waitroomCancelRoomButton) {
+    waitroomCancelRoomButton.addEventListener("click", function onCancelWaitroomRoom() {
+      const confirmed = typeof globalScope.confirm === "function"
+        ? globalScope.confirm("Abandon this room for all players?")
+        : true;
+      if (!confirmed) {
+        return;
+      }
+      multiplayerClient.send("terminate_room");
+    });
+  }
+
+  const waitroomLeaveRoomButton = document.getElementById("waitroom-leave-room");
+  if (waitroomLeaveRoomButton) {
+    waitroomLeaveRoomButton.addEventListener("click", function onLeaveWaitroomRoom() {
+      const confirmed = typeof globalScope.confirm === "function"
+        ? globalScope.confirm("Leave this multiplayer room?")
+        : true;
+      if (!confirmed) {
+        return;
+      }
+      multiplayerClient.send("leave_room");
+      teardownMultiplayerSession("Left multiplayer room");
+    });
+  }
+
+  const waitroomPlayerTableBody = document.getElementById("waitroom-player-table-body");
+  if (waitroomPlayerTableBody) {
+    waitroomPlayerTableBody.addEventListener("click", function onWaitroomKickClick(event) {
+      const target = event.target;
+      if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
+        return;
+      }
+      const button = target.closest("button[data-action='waitroom-kick-player']");
+      if (!button) {
+        return;
+      }
+      if (!isLocalPlayerHost() || String(multiplayerState.room?.status || "") !== "lobby") {
+        return;
+      }
+      const playerId = String(button.getAttribute("data-player-id") || "").trim();
+      if (!playerId) {
+        return;
+      }
+      const confirmed = typeof globalScope.confirm === "function"
+        ? globalScope.confirm("Kick player " + playerId + " from room?")
+        : true;
+      if (!confirmed) {
+        return;
+      }
+      multiplayerClient.send("kick_player", { playerId });
     });
   }
 

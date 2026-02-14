@@ -5,31 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-3" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-5" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
       <div class="new-game-card">
         <h1>Unvention: International Exhibition</h1>
-        <label for="new-game-seed">Seed (optional)</label>
-        <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
-        <div class="mp-setup">
-          <h2>Online Multiplayer (MVP)</h2>
-          <label for="mp-url">Server URL</label>
-          <input id="mp-url" type="text" placeholder="ws://localhost:8080" />
-          <label for="mp-name">Guest Name</label>
-          <input id="mp-name" type="text" placeholder="Guest" />
-          <label for="mp-room-code">Room Code (join)</label>
-          <input id="mp-room-code" type="text" placeholder="ABC123" />
+        <p id="home-step-label" class="mp-status-line">Step 1 of 3</p>
+        <section id="home-step-mode" class="mp-setup">
+          <h2>Game Mode</h2>
+          <div class="mode-toggle" id="game-mode-toggle">
+            <button type="button" data-mode="solo" class="mode-toggle__option mode-toggle__option--active">Solo</button>
+            <button type="button" data-mode="first" class="mode-toggle__option" disabled>My First (coming soon)</button>
+            <button type="button" data-mode="international" class="mode-toggle__option">International</button>
+          </div>
+          <label for="new-game-seed">Seed (optional)</label>
+          <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
           <div class="mp-setup__buttons">
-            <button id="mp-connect" type="button">Connect</button>
-            <button id="mp-create-room" type="button">Create Room</button>
-            <button id="mp-join-room" type="button">Join Room</button>
-            <button id="mp-refresh-rooms" type="button">Refresh Rooms</button>
+            <button id="home-mode-continue" type="button">Continue</button>
+          </div>
+          <p id="home-mode-hint" class="mp-status-line">Choose a mode to continue.</p>
+        </section>
+        <section id="home-step-multiplayer" class="mp-setup" style="display:none">
+          <h2>Multiplayer Setup</h2>
+          <label for="mp-name">Your Name</label>
+          <input id="mp-name" type="text" placeholder="Guest" />
+          <div class="mp-setup__buttons">
+            <button id="home-create-room" type="button">Create New Room</button>
+            <button id="home-join-room-step" type="button">Join Room</button>
+            <button id="home-back-to-mode" type="button">Back</button>
           </div>
           <p id="mp-connection-status" class="mp-status-line">Offline</p>
+        </section>
+        <section id="home-step-room-list" class="mp-setup" style="display:none">
+          <h2>Available Rooms</h2>
           <div id="mp-room-directory" class="mp-room-directory">
-            <p class="mp-status-line">Available Rooms</p>
             <table class="mp-room-directory__table">
               <thead>
                 <tr>
@@ -42,8 +52,35 @@
               <tbody id="mp-room-directory-body"></tbody>
             </table>
           </div>
-        </div>
-        <button id="start-new-game" type="button">New Game</button>
+          <div class="mp-setup__buttons">
+            <button id="home-refresh-rooms" type="button">Refresh Rooms</button>
+            <button id="home-back-to-multiplayer" type="button">Back</button>
+          </div>
+        </section>
+        <section id="home-step-waitroom" class="mp-setup" style="display:none">
+          <h2>Room Waitroom</h2>
+          <label for="waitroom-name">Your Name</label>
+          <input id="waitroom-name" type="text" placeholder="Guest" />
+          <div class="mp-setup__buttons">
+            <button id="waitroom-update-name" type="button">Update Name</button>
+            <button id="waitroom-start-game" type="button">Start Game</button>
+            <button id="waitroom-cancel-room" type="button">Abandon Room</button>
+            <button id="waitroom-leave-room" type="button">Leave Room</button>
+          </div>
+          <p id="waitroom-status" class="mp-status-line">No room joined.</p>
+          <table class="mp-room-directory__table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Status</th>
+                <th>Turn</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="waitroom-player-table-body"></tbody>
+          </table>
+        </section>
+        <button id="start-new-game" type="button" style="display:none">New Game</button>
       </div>
     </section>
     <main id="app-shell" class="app" style="display: none">
@@ -101,7 +138,6 @@
             <p id="mp-turn-roll" class="mp-status-line">Turn: - | Roll: -</p>
             <div class="mp-room-panel__buttons">
               <button id="mp-start-game" type="button">Start Room Game</button>
-              <button id="mp-sync" type="button">Sync</button>
               <button id="mp-leave-room" type="button">Leave Room</button>
             </div>
             <ul id="mp-player-list" class="mp-player-list"></ul>
@@ -133,6 +169,6 @@
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
-    <script src="src/app/bootstrap.js?v=20260214-5"></script>
+    <script src="src/app/bootstrap.js?v=20260214-8"></script>
   </body>
 </html>
