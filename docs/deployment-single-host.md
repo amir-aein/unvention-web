@@ -47,6 +47,8 @@ After deployment finishes, open your Render URL:
    - You should see JSON with `"ok": true`.
 3. `https://YOUR-SERVICE.onrender.com/api/rooms`
    - You should see JSON with room list data.
+4. `https://YOUR-SERVICE.onrender.com/api/rooms/ABC123/history` (replace with real room code after a game)
+   - You should see room history events for that room.
 
 ## 4) Test multiplayer
 
@@ -72,4 +74,4 @@ Render will auto-deploy the new commit.
 ## Notes
 
 - Free hosting tiers can sleep after inactivity. First load may be slow.
-- Current room state is in memory. If server restarts, active rooms are lost.
+- Active room state is in memory. If server restarts, active rooms are lost, but profile snapshots and room event history remain in `server/output/`.

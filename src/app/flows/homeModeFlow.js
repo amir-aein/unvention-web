@@ -40,6 +40,7 @@
       const payload = {
         roomCode: multiplayerState.roomCode,
         name: multiplayerState.name || "Guest",
+        profileToken: multiplayerState.profileToken || "",
       };
       const sent = multiplayerClient.send("join_room", payload);
       if (!sent) {
@@ -94,6 +95,7 @@
           await ensureMultiplayerConnection();
           const sent = multiplayerClient.send("create_room", {
             name: multiplayerState.name || "Host",
+            profileToken: multiplayerState.profileToken || "",
           });
           if (!sent) {
             multiplayerState.lastError = "not_connected";

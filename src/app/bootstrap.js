@@ -293,6 +293,8 @@
             localPart = {
               url: String(parsed.url || defaults.url),
               name: String(parsed.name || ""),
+              profileId: String(parsed.profileId || ""),
+              profileToken: String(parsed.profileToken || ""),
             };
           }
         }
@@ -326,6 +328,8 @@
       name: "",
       roomCode: "",
       playerId: "",
+      profileId: "",
+      profileToken: "",
       reconnectToken: "",
       connected: false,
       connecting: false,
@@ -354,6 +358,8 @@
       const localPayload = {
         url: multiplayerState.url,
         name: multiplayerState.name,
+        profileId: multiplayerState.profileId,
+        profileToken: multiplayerState.profileToken,
       };
       localStorageRef.setItem(MULTIPLAYER_STORAGE_KEY, JSON.stringify(localPayload));
     }
@@ -443,6 +449,7 @@
       multiplayerClient.send("join_room", {
         roomCode: multiplayerState.roomCode,
         reconnectToken: multiplayerState.reconnectToken,
+        profileToken: multiplayerState.profileToken || "",
       });
     }, Math.min(1500 * reconnectAttempts, 5000));
   }
@@ -1200,6 +1207,12 @@
       multiplayerState.lastError = "";
       multiplayerState.roomCode = String(message.roomCode || "");
       multiplayerState.playerId = String(message.playerId || "");
+      if (message.profileId) {
+        multiplayerState.profileId = String(message.profileId || "");
+      }
+      if (message.profileToken) {
+        multiplayerState.profileToken = String(message.profileToken || "");
+      }
       activePlayerId = multiplayerState.playerId || activePlayerId;
       multiplayerState.reconnectToken = String(message.reconnectToken || "");
       appliedServerTurnKey = "";
@@ -1222,6 +1235,12 @@
       importSharedRoomLog(multiplayerState.room);
       if (message?.you?.playerId) {
         multiplayerState.playerId = String(message.you.playerId);
+        if (message?.you?.profileId) {
+          multiplayerState.profileId = String(message.you.profileId || "");
+        }
+        if (message?.you?.profileToken) {
+          multiplayerState.profileToken = String(message.you.profileToken || "");
+        }
         activePlayerId = multiplayerState.playerId || activePlayerId;
         const meInRoom = (Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [])
           .find((player) => String(player?.playerId || "") === String(multiplayerState.playerId || ""));
@@ -4439,6 +4458,7 @@
       multiplayerClient.send("join_room", {
         roomCode: multiplayerState.roomCode,
         reconnectToken: multiplayerState.reconnectToken,
+        profileToken: multiplayerState.profileToken || "",
       });
     });
   }
