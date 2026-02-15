@@ -17,6 +17,9 @@ Open app locally:
 Server endpoints:
 - `GET /health` health check
 - `GET /api/rooms` room directory payload for multiplayer lobby
+- `GET /api/rooms/:roomCode/history?limit=150&before=<sequence>` room event history
+- `GET /api/profile?profileToken=<token>` profile summary + active/recent rooms
+- `GET /api/profile/history?profileToken=<token>&limit=150&before=<sequence>` profile event history
 - `GET /` and static files from project root (serves `index.html`)
 
 ## Protocol
@@ -26,10 +29,10 @@ All messages are JSON with a `type` field.
 ### Client -> Server
 
 - `create_room`
-  - payload: `{ "type": "create_room", "name": "Host Name" }`
+  - payload: `{ "type": "create_room", "name": "Host Name", "profileToken": "optional_stable_profile_token" }`
 - `join_room`
-  - payload: `{ "type": "join_room", "roomCode": "ABC123", "name": "Guest Name" }`
-  - reconnect payload: `{ "type": "join_room", "roomCode": "ABC123", "reconnectToken": "..." }`
+  - payload: `{ "type": "join_room", "roomCode": "ABC123", "name": "Guest Name", "profileToken": "optional_stable_profile_token" }`
+  - reconnect payload: `{ "type": "join_room", "roomCode": "ABC123", "reconnectToken": "...", "profileToken": "optional_stable_profile_token" }`
 - `start_game`
   - payload: `{ "type": "start_game" }`
   - host only
@@ -54,8 +57,8 @@ All messages are JSON with a `type` field.
 ### Server -> Client
 
 - `connected` with `connectionId`
-- `room_joined` with `roomCode`, `playerId`, `reconnectToken`
-- `room_state` with full room snapshot and your player identity
+- `room_joined` with `roomCode`, `playerId`, `reconnectToken`, `profileId`, `profileToken`
+- `room_state` with full room snapshot and your player identity (`playerId`, `profileId`, `profileToken`)
 - `player_state_update` broadcast when any player publishes state
 - `turn_advanced` when all players have ended turn
 - `game_completed` on Sunday completion
@@ -80,6 +83,10 @@ Server action logs are written to:
 `server/output/actions.ndjson`
 
 Each line is one JSON event with timestamp, room code, type, and payload.
+
+Room and profile history read models are written to:
+- `server/output/room-events.ndjson` (append-only room event stream)
+- `server/output/profiles.json` (latest profile snapshot keyed by stable token)
 
 ## One-Computer Testing
 

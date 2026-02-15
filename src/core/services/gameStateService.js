@@ -13,6 +13,50 @@
     return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
   }
 
+  function normalizeModId(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text || "classic";
+  }
+
+  function normalizeSetupSteps(input) {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    return input
+      .map((entry) => {
+        const candidate = entry && typeof entry === "object" ? entry : {};
+        const id = String(candidate.id || "").trim();
+        if (!id) {
+          return null;
+        }
+        const params = candidate.params && typeof candidate.params === "object"
+          ? JSON.parse(JSON.stringify(candidate.params))
+          : {};
+        const enabled = Object.prototype.hasOwnProperty.call(candidate, "enabled")
+          ? Boolean(candidate.enabled)
+          : true;
+        return {
+          id,
+          enabled,
+          params,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeSetupPlan(input) {
+    if (!input || typeof input !== "object") {
+      return null;
+    }
+    return {
+      modId: String(input.modId || "classic"),
+      fingerprint: String(input.fingerprint || ""),
+      steps: Array.isArray(input.steps)
+        ? JSON.parse(JSON.stringify(input.steps))
+        : [],
+    };
+  }
+
   function normalizeGameConfig(input) {
     const candidate = input && typeof input === "object" ? input : {};
     const defaults = {
@@ -26,6 +70,8 @@
       journalCount: normalizeCount(candidate.journalCount, defaults.journalCount, 1, 6),
       workshopCount: normalizeCount(candidate.workshopCount, defaults.workshopCount, 1, 4),
       ruleset,
+      modId: normalizeModId(candidate.modId),
+      setupSteps: normalizeSetupSteps(candidate.setupSteps),
     };
   }
 
@@ -89,6 +135,7 @@
         workshopPhaseContext: {},
         buildDrafts: {},
         buildDecisions: {},
+        setupPlan: null,
         undoHistory: [],
         rollAndGroup: {
           dice: [],
@@ -142,6 +189,7 @@
       if (!merged.buildDecisions || typeof merged.buildDecisions !== "object") {
         merged.buildDecisions = {};
       }
+      merged.setupPlan = normalizeSetupPlan(merged.setupPlan);
       if (!Array.isArray(merged.undoHistory)) {
         merged.undoHistory = [];
       }

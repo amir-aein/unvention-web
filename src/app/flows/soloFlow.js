@@ -10,6 +10,7 @@
     const roundEngineService = deps.roundEngineService;
     const generateRandomSeed = deps.generateRandomSeed;
     const renderState = deps.renderState;
+    const resolveNewGameConfig = deps.resolveNewGameConfig;
 
     function startSoloGame() {
       const input = documentRef?.getElementById("new-game-seed");
@@ -18,8 +19,15 @@
       gameStateService.reset();
       persistUndoHistory();
       loggerService.replaceEntries([]);
-      roundEngineService.initializePlayers(["P1"]);
+      const newGameConfig = typeof resolveNewGameConfig === "function" ? resolveNewGameConfig() : null;
+      if (newGameConfig && typeof newGameConfig === "object") {
+        gameStateService.update({
+          gameConfig: newGameConfig,
+          setupPlan: null,
+        });
+      }
       roundEngineService.setSeed(desiredSeed);
+      roundEngineService.initializePlayers(["P1"]);
       gameStateService.update({ gameStarted: true });
       loggerService.logEvent("info", "New game started", { seed: desiredSeed, source: "ui" });
       renderState();

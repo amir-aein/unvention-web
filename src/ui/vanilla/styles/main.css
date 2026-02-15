@@ -113,6 +113,37 @@ body {
   color: #f8fafc;
 }
 
+.variable-setup {
+  margin-top: 0.2rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid #d6dee8;
+  border-radius: 8px;
+  background: #f1f5f9;
+  display: grid;
+  gap: 0.26rem;
+}
+
+.variable-setup h3 {
+  margin: 0 0 0.12rem;
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.variable-setup__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #334155;
+  cursor: pointer;
+}
+
+.variable-setup__item input[type="checkbox"] {
+  width: 0.9rem;
+  height: 0.9rem;
+  margin: 0;
+}
+
 .mp-room-directory {
   margin-top: 0.35rem;
   border-top: 1px solid #e2e8f0;
@@ -839,6 +870,7 @@ body {
 .workshop-grid-wrapper {
   position: relative;
   width: 80%;
+  aspect-ratio: 1 / 1;
   margin: 0 auto;
 }
 
@@ -865,11 +897,12 @@ body {
 .workshop-line {
   stroke-linecap: round;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .workshop-line--committed {
   stroke: #0b0f19;
-  stroke-width: 36;
+  stroke-width: 5;
   opacity: 0.95;
 }
 
@@ -884,6 +917,9 @@ body {
   z-index: 2;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, 1fr);
+  width: 100%;
+  height: 100%;
   gap: 0.28rem;
 }
 
@@ -911,13 +947,15 @@ body {
 }
 
 .workshop-cell {
-  width: 100%;
-  aspect-ratio: 1 / 1;
+  width: 80%;
+  height: 80%;
   border-radius: 50%;
   border: 1px solid #d1d5db;
   background: #f8fafc;
   display: inline-grid;
   place-items: center;
+  justify-self: center;
+  align-self: center;
   font-size: 1rem;
   font-weight: 700;
   color: #334155;
@@ -955,7 +993,7 @@ body {
 }
 
 .workshop-cell--wild {
-  border-style: dashed;
+  border-style: solid;
   color: #64748b;
 }
 
@@ -1037,14 +1075,18 @@ body {
 
 .workshop-cell--mechanism {
   background: #ffffff !important;
-  box-shadow: inset 0 0 0 10px #0b0f19 !important;
+  border-width: 5px !important;
+  box-shadow: none !important;
   border-color: #0b0f19 !important;
   color: #0f172a !important;
 }
 
 .workshop-cell--empty {
-  border: none;
-  background: transparent;
+  border: 1px solid #cbd5e1;
+  background: #e5e7eb;
+  color: transparent;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+  cursor: default;
 }
 
 .mechanism-usage-tooltip {
@@ -1259,7 +1301,7 @@ body {
   grid-template-columns: repeat(2, 1fr) 8px repeat(2, 1fr);
   grid-template-rows: repeat(2, 1fr) 8px repeat(2, 1fr);
   aspect-ratio: 1 / 1;
-  border: 1px solid #b9c0cb;
+  border: none;
 }
 
 .journal-layout {
@@ -1469,6 +1511,7 @@ button:disabled:hover {
   border-radius: 8px;
   background: #ffffff;
   padding: 0.24rem 0.3rem;
+  min-width: calc(96px + 0.36rem + 0.6rem);
   display: grid;
   gap: 0.14rem;
   justify-items: start;
