@@ -37,6 +37,12 @@
   const MULTIPLAYER_STORAGE_KEY = "unvention.multiplayer.v1";
   const MULTIPLAYER_SESSION_KEY = "unvention.multiplayer.session.v1";
   const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
+  const VARIABLE_SETUP_STEP_IDS_BY_OPTION = {
+    order: ["workshop_layout_order"],
+    idea: ["random_invention_multiplier", "random_workshop_ideas"],
+    parts: ["remove_parts_by_value"],
+  };
+  const VARIABLE_SETUP_OPTION_KEYS = Object.keys(VARIABLE_SETUP_STEP_IDS_BY_OPTION);
   const loadedState = gameStateService.load();
   const undoStack = Array.isArray(loadedState.undoHistory)
     ? loadedState.undoHistory
@@ -90,6 +96,7 @@
   let roomDirectoryLastFetchAt = 0;
   let roomDirectoryError = "";
   let selectedGameMode = "solo";
+  let selectedVariableSetup = getDefaultVariableSetupSelection();
   let homeStep = "mode";
   loadHomeUiState();
   if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
@@ -171,6 +178,66 @@
     renderMultiplayerUi();
   }
 
+  function getDefaultVariableSetupSelection() {
+    return {
+      order: true,
+      idea: true,
+      parts: true,
+    };
+  }
+
+  function normalizeVariableSetupSelection(input) {
+    const defaults = getDefaultVariableSetupSelection();
+    const candidate = input && typeof input === "object" ? input : {};
+    return VARIABLE_SETUP_OPTION_KEYS.reduce((accumulator, key) => {
+      accumulator[key] = Object.prototype.hasOwnProperty.call(candidate, key)
+        ? Boolean(candidate[key])
+        : defaults[key];
+      return accumulator;
+    }, {});
+  }
+
+  function getVariableSetupSelection() {
+    return {
+      ...selectedVariableSetup,
+    };
+  }
+
+  function setVariableSetupSelection(nextSelection) {
+    selectedVariableSetup = normalizeVariableSetupSelection(nextSelection);
+  }
+
+  function resolveHomeNewGameConfig() {
+    const state = gameStateService.getState();
+    const base = state.gameConfig && typeof state.gameConfig === "object"
+      ? JSON.parse(JSON.stringify(state.gameConfig))
+      : {};
+    const enabledOptions = VARIABLE_SETUP_OPTION_KEYS.filter((key) => Boolean(selectedVariableSetup[key]));
+    if (enabledOptions.length === 0) {
+      return {
+        ...base,
+        modId: "classic",
+        setupSteps: [],
+      };
+    }
+    const disabledSteps = VARIABLE_SETUP_OPTION_KEYS
+      .filter((key) => !selectedVariableSetup[key])
+      .flatMap((key) => {
+        const stepIds = Array.isArray(VARIABLE_SETUP_STEP_IDS_BY_OPTION[key])
+          ? VARIABLE_SETUP_STEP_IDS_BY_OPTION[key]
+          : [];
+        return stepIds.map((stepId) => ({
+          id: stepId,
+          enabled: false,
+        }));
+      });
+    return {
+      ...base,
+      modId: "variable_setup",
+      setupSteps: disabledSteps,
+    };
+  }
+
   function loadHomeUiState() {
     const localStorageRef = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
     if (!localStorageRef) {
@@ -193,6 +260,7 @@
       if (step) {
         homeStep = step;
       }
+      setVariableSetupSelection(parsed.variableSetup);
     } catch (_error) {}
   }
 
@@ -204,6 +272,7 @@
     try {
       localStorageRef.setItem(HOME_UI_STORAGE_KEY, JSON.stringify({
         selectedGameMode,
+        variableSetup: selectedVariableSetup,
         homeStep,
       }));
     } catch (_error) {}
@@ -612,10 +681,33 @@
     }
     const continueButton = document.getElementById("home-mode-continue");
     const modeHint = document.getElementById("home-mode-hint");
+    const variableSetupModeSection = document.getElementById("home-variable-setup-mode");
+    const variableSetupMultiplayerSection = document.getElementById("home-variable-setup-multiplayer");
     if (continueButton) {
       continueButton.textContent = selectedGameMode === "solo" ? "Start Solo Game" : "Continue";
       continueButton.disabled = selectedGameMode === "first";
     }
+    if (variableSetupModeSection && variableSetupModeSection.style) {
+      variableSetupModeSection.style.display = selectedGameMode === "solo" ? "grid" : "none";
+    }
+    if (variableSetupMultiplayerSection && variableSetupMultiplayerSection.style) {
+      variableSetupMultiplayerSection.style.display = selectedGameMode === "international" ? "grid" : "none";
+    }
+    [
+      "var-setup-order-mode",
+      "var-setup-idea-mode",
+      "var-setup-parts-mode",
+      "var-setup-order-multiplayer",
+      "var-setup-idea-multiplayer",
+      "var-setup-parts-multiplayer",
+    ].forEach((id) => {
+      const input = document.getElementById(id);
+      if (!input || typeof input.getAttribute !== "function") {
+        return;
+      }
+      const option = String(input.getAttribute("data-variable-setup-option") || "");
+      input.checked = Boolean(selectedVariableSetup[option]);
+    });
     if (modeHint) {
       if (selectedGameMode === "solo") {
         modeHint.textContent = "Solo starts immediately.";
@@ -1043,8 +1135,12 @@
       loggerService.replaceEntries([]);
       localTurnActionBuffer = [];
       localPublishedActionCursor = 0;
-      roundEngineService.initializePlayers([activePlayerId]);
+      gameStateService.update({
+        gameConfig: resolveHomeNewGameConfig(),
+        setupPlan: null,
+      });
       roundEngineService.setSeed(String(room.code));
+      roundEngineService.initializePlayers([activePlayerId]);
       gameStateService.update({ gameStarted: true, activePlayerId });
       localTurnActionCursor = loggerService.toSerializableEntries().length;
     }
@@ -1686,12 +1782,11 @@
       return;
     }
     if (title) {
-      title.textContent = "Turn " + String(state?.turnNumber || "-") + ": Dice Groups";
+      title.textContent = "Turn " + String(state?.turnNumber || "-") + ": Rolled Dice";
     }
     const dice = Array.isArray(state.rollAndGroup?.dice) ? state.rollAndGroup.dice : [];
-    const groups = Array.isArray(state.rollAndGroup?.groups) ? state.rollAndGroup.groups : [];
     if (dice.length === 0) {
-      container.innerHTML = "<span class='journal-muted'>Waiting for roll and group phase.</span>";
+      container.innerHTML = "<span class='journal-muted'>Waiting for roll phase.</span>";
       container.className = "round-roll-container";
       return;
     }
@@ -1700,27 +1795,14 @@
     if (waitingForReveal) {
       container.innerHTML =
         '<span class="round-roll-spinner" aria-hidden="true"></span>' +
-        "<span class='journal-muted'>Rolling and grouping outcomes...</span>";
+        "<span class='journal-muted'>Rolling dice...</span>";
       container.className = "round-roll-container round-roll-container--pending";
       return;
     }
-    const groupChips = groups
-      .map((group, index) => {
-        const safeGroup = Array.isArray(group) ? group : [];
-        const groupLabel = renderGroupOptionLabel({
-          values: safeGroup,
-          label: safeGroup.join(", "),
-        });
-        if (groupLabel.isDice) {
-          return '<span class="round-roll-group-chip" aria-label="Group ' + String(index + 1) + '">' + groupLabel.markup + "</span>";
-        }
-        return '<span class="round-roll-chip">' + String(groupLabel.markup) + "</span>";
-      })
-      .join("");
     container.innerHTML =
-      '<span class="journal-muted">Groups:</span>' +
-      '<span class="round-roll-groups">' +
-      groupChips +
+      '<span class="journal-muted">Rolled:</span>' +
+      '<span class="round-roll-dice-tray">' +
+      dice.map((value, index) => renderRoundRollDie(value, index)).join("") +
       "</span>";
     container.className = "round-roll-container";
   }
@@ -3012,26 +3094,26 @@
     }
     const lineHtml = lines
       .map(({ a, b, className }) => {
-        const x1 = a.col * 100 + 50;
-        const y1 = a.row * 100 + 50;
-        const x2 = b.col * 100 + 50;
-        const y2 = b.row * 100 + 50;
+        const x1 = a.col * 20 + 10;
+        const y1 = a.row * 20 + 10;
+        const x2 = b.col * 20 + 10;
+        const y2 = b.row * 20 + 10;
         return (
           '<line class="' +
           className +
           '" x1="' +
           String(x1) +
-          '" y1="' +
+          '%" y1="' +
           String(y1) +
-          '" x2="' +
+          '%" x2="' +
           String(x2) +
-          '" y2="' +
+          '%" y2="' +
           String(y2) +
-          '"></line>'
+          '%" vector-effect="non-scaling-stroke"></line>'
         );
       })
       .join("");
-    return '<svg viewBox="0 0 500 500" preserveAspectRatio="none">' + lineHtml + "</svg>";
+    return '<svg preserveAspectRatio="none">' + lineHtml + "</svg>";
   }
 
   function parseEdgeId(edgeId) {
@@ -3672,6 +3754,7 @@
         loggerService,
         roundEngineService,
         generateRandomSeed,
+        resolveNewGameConfig: resolveHomeNewGameConfig,
         renderState,
       })
     : null;
@@ -3700,6 +3783,8 @@
         setSelectedGameMode(nextMode) {
           selectedGameMode = String(nextMode || "solo");
         },
+        getVariableSetupSelection,
+        setVariableSetupSelection,
         persistHomeUiState,
       })
     : null;

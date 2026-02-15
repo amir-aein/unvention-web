@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260214-5" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-11" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
@@ -21,6 +21,21 @@
           </div>
           <label for="new-game-seed">Seed (optional)</label>
           <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
+          <section id="home-variable-setup-mode" class="variable-setup" style="display:none">
+            <h3>Variable Setup</h3>
+            <label class="variable-setup__item" for="var-setup-order-mode">
+              <input id="var-setup-order-mode" type="checkbox" data-variable-setup-option="order" />
+              <span>order</span>
+            </label>
+            <label class="variable-setup__item" for="var-setup-idea-mode">
+              <input id="var-setup-idea-mode" type="checkbox" data-variable-setup-option="idea" />
+              <span>idea</span>
+            </label>
+            <label class="variable-setup__item" for="var-setup-parts-mode">
+              <input id="var-setup-parts-mode" type="checkbox" data-variable-setup-option="parts" />
+              <span>parts</span>
+            </label>
+          </section>
           <div class="mp-setup__buttons">
             <button id="home-mode-continue" type="button">Continue</button>
           </div>
@@ -30,6 +45,21 @@
           <h2>Multiplayer Setup</h2>
           <label for="mp-name">Your Name</label>
           <input id="mp-name" type="text" placeholder="Guest" />
+          <section id="home-variable-setup-multiplayer" class="variable-setup" style="display:none">
+            <h3>Variable Setup</h3>
+            <label class="variable-setup__item" for="var-setup-order-multiplayer">
+              <input id="var-setup-order-multiplayer" type="checkbox" data-variable-setup-option="order" />
+              <span>order</span>
+            </label>
+            <label class="variable-setup__item" for="var-setup-idea-multiplayer">
+              <input id="var-setup-idea-multiplayer" type="checkbox" data-variable-setup-option="idea" />
+              <span>idea</span>
+            </label>
+            <label class="variable-setup__item" for="var-setup-parts-multiplayer">
+              <input id="var-setup-parts-multiplayer" type="checkbox" data-variable-setup-option="parts" />
+              <span>parts</span>
+            </label>
+          </section>
           <div class="mp-setup__buttons">
             <button id="home-create-room" type="button">Create New Room</button>
             <button id="home-join-room-step" type="button">Join Room</button>
@@ -162,11 +192,12 @@
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
     <script src="src/core/config/defaultRuleset.js"></script>
+    <script src="src/core/services/setupPipelineService.js"></script>
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
     <script src="src/app/flows/soloFlow.js"></script>
     <script src="src/app/flows/homeModeFlow.js"></script>
-    <script src="src/app/bootstrap.js?v=20260214-10"></script>
+    <script src="src/app/bootstrap.js?v=20260215-14"></script>
   </body>
 </html>
