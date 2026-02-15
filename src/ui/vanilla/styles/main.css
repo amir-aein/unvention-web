@@ -177,6 +177,66 @@ body {
   gap: 0.35rem;
 }
 
+.mp-competitor-visibility {
+  margin-top: 0.25rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mp-competitor-visibility__title {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #334155;
+}
+
+.mp-competitor-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mp-competitor-card {
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.35rem 0.42rem;
+  display: grid;
+  gap: 0.22rem;
+}
+
+.mp-competitor-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.mp-competitor-card__name {
+  font-size: 0.76rem;
+  color: #0f172a;
+}
+
+.mp-competitor-card__status,
+.mp-competitor-card__meta,
+.mp-competitor-card__activity,
+.mp-competitor-card__inventions {
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.mp-competitor-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.14rem 0.4rem;
+  font-size: 0.72rem;
+  color: #334155;
+}
+
+.mp-competitor-card__metrics strong,
+.mp-competitor-card__activity strong,
+.mp-competitor-card__inventions strong {
+  color: #0f172a;
+}
+
 .mp-room-panel__buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -570,6 +630,58 @@ body {
 .inventions-panel h2 {
   margin: 0 0 0.6rem;
   font-size: 1rem;
+}
+
+.section-player-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  margin: -0.2rem 0 0.5rem;
+}
+
+.section-player-tab {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.72rem;
+  padding: 0.16rem 0.46rem;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+.section-player-tab:hover {
+  border-color: #94a3b8;
+  background: #ffffff;
+}
+
+.section-player-tab--active {
+  border-color: #0f172a;
+  background: #e2e8f0;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.section-player-tab--active:hover {
+  border-color: #0f172a;
+  background: #e2e8f0;
+}
+
+.section-view-fade {
+  animation: section-view-fade 180ms ease;
+}
+
+@keyframes section-view-fade {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.38;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 .workshops-container {
@@ -1492,6 +1604,55 @@ button:disabled:hover {
   gap: 0.22rem;
   font-size: 0.74rem;
   color: #334155;
+  overflow: auto;
+}
+
+.player-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.69rem;
+  color: #334155;
+}
+
+.player-summary-table th,
+.player-summary-table td {
+  border: 1px solid #dbe2ea;
+  padding: 0.2rem 0.26rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.player-summary-table th {
+  background: #f1f5f9;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.player-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+}
+
+.player-presence-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.player-presence-dot--online {
+  background: #16a34a;
+}
+
+.player-presence-dot--offline {
+  background: #dc2626;
+}
+
+.tools-panel-subtitle {
+  margin: -0.1rem 0 0.5rem;
+  font-size: 0.74rem;
+  color: #475569;
 }
 
 .summary-layout {
@@ -2107,5 +2268,9 @@ button:disabled:hover {
   .invention-criterion-row {
     grid-template-columns: 1fr;
     justify-items: start;
+  }
+
+  .mp-competitor-card__metrics {
+    grid-template-columns: 1fr;
   }
 }

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-11" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-16" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
@@ -142,31 +142,33 @@
           <div id="round-roll-container" class="round-roll-container"></div>
         </section>
         <section id="journals-panel" class="journals-panel" aria-label="Player journals">
-          <h2>P1 Journals</h2>
+          <h2>Journals</h2>
+          <div id="journals-player-tabs" class="section-player-tabs" aria-label="Journal player tabs"></div>
           <div id="journals-container" class="journals-container"></div>
         </section>
         <section id="workshops-panel" class="workshops-panel" aria-label="Player workshops">
-          <h2>P1 Workshops</h2>
+          <h2>Workshops</h2>
+          <div id="workshops-player-tabs" class="section-player-tabs" aria-label="Workshop player tabs"></div>
           <div id="workshops-container" class="workshops-container"></div>
         </section>
         <section id="inventions-panel" class="inventions-panel" aria-label="Player inventions">
-          <h2>P1 Inventions</h2>
+          <h2>Inventions</h2>
+          <div id="inventions-player-tabs" class="section-player-tabs" aria-label="Invention player tabs"></div>
           <div id="inventions-container" class="inventions-container"></div>
         </section>
         <section id="tools-panel" class="tools-panel" aria-label="Player tools">
           <h2>Tools</h2>
-          <p class="tools-placeholder">Tool interactions coming next.</p>
+          <div id="tools-player-tabs" class="section-player-tabs" aria-label="Tool player tabs"></div>
+          <div id="tools-container" class="tools-container">
+            <p class="tools-placeholder">Tool interactions coming next.</p>
+          </div>
         </section>
       </section>
 
       <aside class="log-sidebar" aria-label="Action log">
         <section id="player-state-panel" class="player-state-panel" aria-label="Player status">
-          <h3 id="player-state-title">You</h3>
+          <h3 id="player-state-title">Snapshot</h3>
           <div id="player-state-summary" class="player-state-summary"></div>
-          <div id="mp-room-panel" class="mp-room-panel">
-            <p id="mp-room-status" class="mp-status-line">No room joined.</p>
-            <ul id="mp-player-list" class="mp-player-list"></ul>
-          </div>
           <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
         </section>
         <div class="log-header">
@@ -187,7 +189,7 @@
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
-    <script src="src/adapters/web/multiplayerClient.js?v=20260214-3"></script>
+    <script src="src/adapters/web/multiplayerClient.js?v=20260215-4"></script>
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
@@ -197,7 +199,7 @@
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
     <script src="src/app/flows/soloFlow.js"></script>
-    <script src="src/app/flows/homeModeFlow.js"></script>
-    <script src="src/app/bootstrap.js?v=20260215-14"></script>
+    <script src="src/app/flows/homeModeFlow.js?v=20260215-2"></script>
+    <script src="src/app/bootstrap.js?v=20260215-22"></script>
   </body>
 </html>

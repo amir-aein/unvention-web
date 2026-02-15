@@ -43,6 +43,7 @@
     parts: ["remove_parts_by_value"],
   };
   const VARIABLE_SETUP_OPTION_KEYS = Object.keys(VARIABLE_SETUP_STEP_IDS_BY_OPTION);
+  const SECTION_VIEW_KEYS = ["journals", "workshops", "inventions", "tools"];
   const loadedState = gameStateService.load();
   const undoStack = Array.isArray(loadedState.undoHistory)
     ? loadedState.undoHistory
@@ -97,6 +98,11 @@
   let roomDirectoryError = "";
   let selectedGameMode = "solo";
   let selectedVariableSetup = getDefaultVariableSetupSelection();
+  let sectionPlayerViews = SECTION_VIEW_KEYS.reduce((accumulator, key) => {
+    accumulator[key] = "";
+    return accumulator;
+  }, {});
+  let sectionViewTransitionPending = false;
   let homeStep = "mode";
   loadHomeUiState();
   if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
@@ -315,11 +321,15 @@
         }
       } catch (_error) {}
     }
-    return {
+    const merged = {
       ...defaults,
       ...localPart,
       ...sessionPart,
     };
+    if (shouldNormalizeLocalDevMultiplayerUrl(merged.url)) {
+      merged.url = inferLocalNodeMultiplayerUrl();
+    }
+    return merged;
   }
 
   function getDefaultMultiplayerState() {
@@ -339,16 +349,67 @@
     };
   }
 
+  function isLocalHostname(hostnameInput) {
+    const hostname = String(hostnameInput || "").trim().toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  }
+
+  function formatHostnameWithPort(hostnameInput, portInput) {
+    const hostname = String(hostnameInput || "").trim();
+    const port = String(portInput || "").trim();
+    if (!hostname) {
+      return "";
+    }
+    const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
+    const normalizedHost = needsBrackets ? "[" + hostname + "]" : hostname;
+    return port ? normalizedHost + ":" + port : normalizedHost;
+  }
+
+  function inferLocalNodeMultiplayerUrl() {
+    if (typeof globalScope.location === "undefined") {
+      return "ws://localhost:8080";
+    }
+    const protocol = String(globalScope.location.protocol || "").toLowerCase();
+    const hostname = String(globalScope.location.hostname || "").trim();
+    const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+    const host = formatHostnameWithPort(hostname || "localhost", "8080");
+    return wsProtocol + "//" + host;
+  }
+
   function inferDefaultMultiplayerUrl() {
     if (typeof globalScope.location !== "undefined") {
       const protocol = String(globalScope.location.protocol || "").toLowerCase();
       const host = String(globalScope.location.host || "").trim();
+      const hostname = String(globalScope.location.hostname || "").trim();
+      const port = String(globalScope.location.port || "").trim();
       if (host && (protocol === "http:" || protocol === "https:")) {
+        if (isLocalHostname(hostname) && port && port !== "8080") {
+          return inferLocalNodeMultiplayerUrl();
+        }
         const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
         return wsProtocol + "//" + host;
       }
     }
     return "ws://localhost:8080";
+  }
+
+  function shouldNormalizeLocalDevMultiplayerUrl(currentUrlInput) {
+    if (typeof globalScope.location === "undefined") {
+      return false;
+    }
+    const locationHostname = String(globalScope.location.hostname || "").trim();
+    const locationPort = String(globalScope.location.port || "").trim();
+    if (!isLocalHostname(locationHostname) || !locationPort || locationPort === "8080") {
+      return false;
+    }
+    try {
+      const parsed = new URL(String(currentUrlInput || ""));
+      const currentHostname = String(parsed.hostname || "").trim();
+      const currentPort = String(parsed.port || "").trim();
+      return isLocalHostname(currentHostname) && (currentPort === locationPort || !currentPort);
+    } catch (_error) {
+      return false;
+    }
   }
 
   function persistMultiplayerState() {
@@ -373,7 +434,9 @@
     }
   }
 
-  function clearMultiplayerSessionIdentity() {
+  function clearMultiplayerSessionIdentity(optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const preserveHomeStep = Boolean(options.preserveHomeStep);
     multiplayerState.roomCode = "";
     multiplayerState.playerId = "";
     multiplayerState.reconnectToken = "";
@@ -386,6 +449,10 @@
     awaitingRoomStateRecovery = false;
     lastSyncedStateSignature = "";
     activePlayerId = "P1";
+    sectionPlayerViews = SECTION_VIEW_KEYS.reduce((accumulator, key) => {
+      accumulator[key] = "";
+      return accumulator;
+    }, {});
     if (reconnectTimer) {
       globalScope.clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -395,8 +462,10 @@
       sessionStorageRef.removeItem(MULTIPLAYER_SESSION_KEY);
     }
     reconnectAttempts = 0;
-    homeStep = "mode";
-    persistHomeUiState();
+    if (!preserveHomeStep) {
+      homeStep = "mode";
+      persistHomeUiState();
+    }
   }
 
   function isInteractionBlocked() {
@@ -471,16 +540,66 @@
     return "Offline";
   }
 
-  function toRoomDirectoryUrl(inputUrl) {
-    const fallback = "http://localhost:8080/api/rooms";
-    try {
-      const raw = String(inputUrl || "").trim() || "ws://localhost:8080";
-      const parsed = new URL(raw);
-      const protocol = parsed.protocol === "wss:" ? "https:" : "http:";
-      return protocol + "//" + parsed.host + "/api/rooms";
-    } catch (_error) {
-      return fallback;
+  function normalizeHttpProtocol(protocolInput) {
+    const protocol = String(protocolInput || "").toLowerCase();
+    if (protocol === "wss:" || protocol === "https:") {
+      return "https:";
     }
+    if (protocol === "ws:" || protocol === "http:") {
+      return "http:";
+    }
+    return "http:";
+  }
+
+  function buildRoomDirectoryCandidates(inputUrl) {
+    const candidates = [];
+    const seen = new Set();
+    const pushUnique = (urlInput) => {
+      const url = String(urlInput || "").trim();
+      if (!url || seen.has(url)) {
+        return;
+      }
+      seen.add(url);
+      candidates.push(url);
+    };
+
+    if (typeof globalScope.location !== "undefined") {
+      const origin = String(globalScope.location.origin || "").trim();
+      const locationHostname = String(globalScope.location.hostname || "").trim();
+      const locationPort = String(globalScope.location.port || "").trim();
+      const localDevWithSeparateApiPort = isLocalHostname(locationHostname) && locationPort && locationPort !== "8080";
+      if (localDevWithSeparateApiPort) {
+        const localNodeHttpBase = inferLocalNodeMultiplayerUrl()
+          .replace(/^wss:/, "https:")
+          .replace(/^ws:/, "http:");
+        pushUnique(localNodeHttpBase + "/api/rooms");
+      }
+      if (origin && !localDevWithSeparateApiPort) {
+        pushUnique(origin + "/api/rooms");
+      }
+    }
+
+    try {
+      let raw = String(inputUrl || "").trim() || "ws://localhost:8080";
+      if (shouldNormalizeLocalDevMultiplayerUrl(raw)) {
+        raw = inferLocalNodeMultiplayerUrl();
+      }
+      const parsed = new URL(raw);
+      const origin = normalizeHttpProtocol(parsed.protocol) + "//" + parsed.host;
+      const rawPath = String(parsed.pathname || "/");
+      const trimmedPath = rawPath.replace(/\/+$/, "");
+      if (trimmedPath && trimmedPath !== "/") {
+        let basePath = trimmedPath;
+        if (basePath.endsWith("/ws")) {
+          basePath = basePath.slice(0, -3);
+        }
+        pushUnique(origin + basePath + "/api/rooms");
+      }
+      pushUnique(origin + "/api/rooms");
+    } catch (_error) {}
+
+    pushUnique("http://localhost:8080/api/rooms");
+    return candidates;
   }
 
   function renderRoomDirectory() {
@@ -532,16 +651,31 @@
     roomDirectoryLoading = true;
     roomDirectoryError = "";
     renderRoomDirectory();
-    const url = toRoomDirectoryUrl(multiplayerState.url) + "?t=" + String(now);
+    const candidates = buildRoomDirectoryCandidates(multiplayerState.url)
+      .map((baseUrl) => baseUrl + "?t=" + String(now));
+    let loaded = false;
+    let lastErrorMessage = "Could not load rooms";
     try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Failed to load room list (" + String(response.status) + ")");
+      for (const url of candidates) {
+        try {
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) {
+            lastErrorMessage = "Failed to load room list (" + String(response.status) + ")";
+            continue;
+          }
+          const payload = await response.json();
+          roomDirectoryRows = Array.isArray(payload?.roomList) ? payload.roomList : [];
+          roomDirectoryLastFetchAt = Date.now();
+          roomDirectoryError = "";
+          loaded = true;
+          break;
+        } catch (error) {
+          lastErrorMessage = String(error?.message || "Could not load rooms");
+        }
       }
-      const payload = await response.json();
-      roomDirectoryRows = Array.isArray(payload?.roomList) ? payload.roomList : [];
-      roomDirectoryLastFetchAt = Date.now();
-      roomDirectoryError = "";
+      if (!loaded) {
+        roomDirectoryError = lastErrorMessage;
+      }
     } catch (error) {
       roomDirectoryError = String(error?.message || "Could not load rooms");
     } finally {
@@ -603,6 +737,12 @@
       .join("");
     if (playerList) {
       playerList.innerHTML = playerRows;
+      playerList.style.display = "none";
+    }
+    const competitorPanel = document.getElementById("mp-competitor-visibility");
+    if (competitorPanel) {
+      competitorPanel.innerHTML = "";
+      competitorPanel.style.display = "none";
     }
     if (waitroomPlayerTableBody) {
       const canKick = Boolean(isLocalPlayerHost() && room?.status === "lobby");
@@ -752,6 +892,13 @@
     if (multiplayerState.connected || multiplayerState.connecting) {
       return;
     }
+    if (shouldNormalizeLocalDevMultiplayerUrl(multiplayerState.url)) {
+      const normalizedUrl = inferLocalNodeMultiplayerUrl();
+      if (normalizedUrl && normalizedUrl !== multiplayerState.url) {
+        multiplayerState.url = normalizedUrl;
+        persistMultiplayerState();
+      }
+    }
     multiplayerState.connecting = true;
     multiplayerState.lastError = "";
     renderMultiplayerUi();
@@ -762,9 +909,32 @@
         multiplayerState.connecting = false;
       }
     } catch (error) {
+      const initialDetail = String(error?.message || "connect_failed");
+      const shouldRetryWithLocalNode = shouldNormalizeLocalDevMultiplayerUrl(multiplayerState.url);
+      if (shouldRetryWithLocalNode) {
+        const fallbackUrl = inferLocalNodeMultiplayerUrl();
+        if (fallbackUrl && fallbackUrl !== multiplayerState.url) {
+          multiplayerState.url = fallbackUrl;
+          persistMultiplayerState();
+          try {
+            await multiplayerClient.connect(multiplayerState.url);
+            multiplayerState.connected = true;
+            multiplayerState.connecting = false;
+            multiplayerState.lastError = "";
+            loggerService.logEvent("info", "Multiplayer auto-switched to local Node server", {
+              url: multiplayerState.url,
+              source: "ui",
+            });
+            renderMultiplayerUi();
+            return;
+          } catch (_retryError) {
+            // fall through to standard error handling below
+          }
+        }
+      }
       multiplayerState.connecting = false;
       multiplayerState.connected = false;
-      multiplayerState.lastError = String(error?.message || "connect_failed");
+      multiplayerState.lastError = initialDetail;
       loggerService.logEvent("error", "Multiplayer connection failed", { detail: multiplayerState.lastError, source: "ui" });
       renderMultiplayerUi();
     }
@@ -803,13 +973,320 @@
     return playerId;
   }
 
+  function escapeHtml(valueInput) {
+    return String(valueInput || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function getPhaseShortLabel(phaseInput) {
+    const labels = {
+      roll_and_group: "Roll",
+      journal: "Journal",
+      workshop: "Workshop",
+      build: "Build",
+      invent: "Invent",
+      end_of_round: "End Turn",
+    };
+    const key = String(phaseInput || "");
+    return labels[key] || "Unknown";
+  }
+
+  function computeAvailableWrenchesFromSnapshot(playerSnapshotInput) {
+    const playerSnapshot = playerSnapshotInput && typeof playerSnapshotInput === "object"
+      ? playerSnapshotInput
+      : null;
+    if (!playerSnapshot) {
+      return null;
+    }
+    const journals = Array.isArray(playerSnapshot.journals) ? playerSnapshot.journals : [];
+    const earned = journals.reduce((count, journal) => {
+      const row = Array.isArray(journal?.rowWrenches) ? journal.rowWrenches : [];
+      const col = Array.isArray(journal?.columnWrenches) ? journal.columnWrenches : [];
+      return (
+        count +
+        row.filter((value) => value === "earned").length +
+        col.filter((value) => value === "earned").length
+      );
+    }, 0);
+    const spent = Number(playerSnapshot.spentWrenches || 0);
+    return Math.max(0, earned - spent);
+  }
+
+  function getLiveStateSnapshotForRoomPlayer(roomPlayerInput) {
+    const roomPlayer = roomPlayerInput && typeof roomPlayerInput === "object" ? roomPlayerInput : null;
+    const liveState = roomPlayer?.liveState && typeof roomPlayer.liveState === "object"
+      ? roomPlayer.liveState
+      : null;
+    if (!roomPlayer || !liveState) {
+      return { state: null, player: null };
+    }
+    const players = Array.isArray(liveState.players) ? liveState.players : [];
+    const byId = players.find((item) => String(item?.id || "") === String(roomPlayer.playerId || ""));
+    return {
+      state: liveState,
+      player: byId || players[0] || null,
+    };
+  }
+
+  function getLastSharedActionForPlayer(roomInput, playerIdInput) {
+    const room = roomInput && typeof roomInput === "object" ? roomInput : null;
+    const playerId = String(playerIdInput || "");
+    const entries = Array.isArray(room?.sharedLog) ? room.sharedLog : [];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      const actor = String(entry?.context?.playerId || "");
+      if (actor === playerId) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  function renderCompetitorVisibilityPanel(roomInput) {
+    const container = document.getElementById("mp-competitor-visibility");
+    if (!container) {
+      return;
+    }
+    const room = roomInput && typeof roomInput === "object" ? roomInput : null;
+    if (!room) {
+      container.innerHTML = "";
+      if (container.style) {
+        container.style.display = "none";
+      }
+      return;
+    }
+    if (container.style) {
+      container.style.display = "grid";
+    }
+    if (room.status === "lobby") {
+      container.innerHTML = "<p class='mp-status-line'>Competitor visibility appears after the game starts.</p>";
+      return;
+    }
+    const players = Array.isArray(room.players) ? room.players : [];
+    const localPlayerId = String(multiplayerState.playerId || "");
+    const competitors = players.filter((player) => String(player?.playerId || "") !== localPlayerId);
+    if (competitors.length === 0) {
+      container.innerHTML = "<p class='mp-status-line'>No competitors in this room yet.</p>";
+      return;
+    }
+    const roomTurn = Number(room?.turn?.number || 0);
+    const roomDay = String(room?.turn?.day || "");
+    const cards = competitors.map((player) => {
+      const snapshot = getLiveStateSnapshotForRoomPlayer(player);
+      const state = snapshot.state;
+      const playerSnapshot = snapshot.player;
+      const hasSnapshot = Boolean(playerSnapshot);
+      const totalScore = hasSnapshot ? Number(playerSnapshot.totalScore || 0) : null;
+      const completedJournals = hasSnapshot ? Number(playerSnapshot.completedJournals || 0) : null;
+      const unlockedTools = hasSnapshot && Array.isArray(playerSnapshot.unlockedTools)
+        ? playerSnapshot.unlockedTools.length
+        : null;
+      const wrenches = hasSnapshot ? computeAvailableWrenchesFromSnapshot(playerSnapshot) : null;
+      const liveTurn = hasSnapshot ? Number(state?.turnNumber || 0) : null;
+      const liveDay = hasSnapshot ? String(state?.currentDay || "") : "";
+      const inSync = hasSnapshot && liveTurn === roomTurn && liveDay === roomDay;
+      const livePhase = hasSnapshot ? getPhaseShortLabel(state?.phase) : "No state";
+      const lastAction = getLastSharedActionForPlayer(room, player.playerId);
+      const lastActionText = lastAction?.message
+        ? String(lastAction.message)
+        : "No shared action yet.";
+      const inventionSummary = hasSnapshot && Array.isArray(playerSnapshot.inventions)
+        ? playerSnapshot.inventions
+            .map((invention) => {
+              const inventionId = String(invention?.id || "?");
+              const placements = Array.isArray(invention?.placements) ? invention.placements.length : 0;
+              return inventionId + ":" + String(placements);
+            })
+            .join(" | ")
+        : "";
+      const onlineTag = player.connected ? "online" : "offline";
+      const turnTag = player.endedTurn ? "ended turn" : "playing";
+      const statusText = onlineTag + " | " + turnTag;
+      const syncText = hasSnapshot
+        ? (inSync ? "synced" : "syncing")
+        : "waiting";
+      return "<article class='mp-competitor-card'>" +
+        "<div class='mp-competitor-card__head'>" +
+        "<strong class='mp-competitor-card__name'>" + escapeHtml(player.name || player.playerId || "Guest") + "</strong>" +
+        "<span class='mp-competitor-card__status'>" + escapeHtml(statusText) + "</span>" +
+        "</div>" +
+        "<div class='mp-competitor-card__meta'>Phase: " + escapeHtml(livePhase) + " | " + escapeHtml(syncText) + "</div>" +
+        "<div class='mp-competitor-card__metrics'>" +
+        "<span><strong>Score</strong> " + (totalScore === null ? "-" : String(totalScore)) + "</span>" +
+        "<span><strong>Journals</strong> " + (completedJournals === null ? "-" : String(completedJournals) + "/3") + "</span>" +
+        "<span><strong>Wrenches</strong> " + (wrenches === null ? "-" : String(wrenches)) + "</span>" +
+        "<span><strong>Tools</strong> " + (unlockedTools === null ? "-" : String(unlockedTools)) + "</span>" +
+        "</div>" +
+        "<div class='mp-competitor-card__activity'><strong>Latest:</strong> " + escapeHtml(lastActionText) + "</div>" +
+        (inventionSummary
+          ? "<div class='mp-competitor-card__inventions'><strong>Inventions</strong> " + escapeHtml(inventionSummary) + "</div>"
+          : "") +
+        "</article>";
+    }).join("");
+    container.innerHTML =
+      "<h4 class='mp-competitor-visibility__title'>Competitor Visibility</h4>" +
+      "<div class='mp-competitor-grid'>" + cards + "</div>";
+  }
+
+  function getOrderedPlayerIdsForView(stateInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const ordered = [];
+    const seen = new Set();
+    const push = (playerIdInput) => {
+      const playerId = String(playerIdInput || "").trim();
+      if (!playerId || seen.has(playerId)) {
+        return;
+      }
+      seen.add(playerId);
+      ordered.push(playerId);
+    };
+    const roomPlayers = Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [];
+    roomPlayers.forEach((player) => push(player?.playerId));
+    const localPlayers = Array.isArray(state.players) ? state.players : [];
+    localPlayers.forEach((player) => push(player?.id));
+    push(activePlayerId);
+    if (ordered.length === 0) {
+      push("P1");
+    }
+    const activeId = String(activePlayerId || "").trim();
+    if (!activeId || !seen.has(activeId)) {
+      return ordered;
+    }
+    return [activeId].concat(ordered.filter((playerId) => playerId !== activeId));
+  }
+
+  function getPlayerSnapshotForView(stateInput, playerIdInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const playerId = String(playerIdInput || "").trim();
+    if (!playerId) {
+      return { state: null, player: null };
+    }
+    const localPlayers = Array.isArray(state.players) ? state.players : [];
+    const localPlayer = localPlayers.find((player) => String(player?.id || "") === playerId);
+    if (localPlayer) {
+      return { state, player: localPlayer };
+    }
+    const roomPlayers = Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [];
+    const roomPlayer = roomPlayers.find((player) => String(player?.playerId || "") === playerId);
+    if (!roomPlayer) {
+      return { state: null, player: null };
+    }
+    const snapshot = getLiveStateSnapshotForRoomPlayer(roomPlayer);
+    if (snapshot.player) {
+      return {
+        state: snapshot.state || null,
+        player: snapshot.player,
+      };
+    }
+    return { state: null, player: null };
+  }
+
+  function getSectionView(stateInput, sectionKeyInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const sectionKey = String(sectionKeyInput || "").trim();
+    const orderedIds = getOrderedPlayerIdsForView(state);
+    const currentForSection = String(sectionPlayerViews?.[sectionKey] || "").trim();
+    const currentGlobal = String(sectionPlayerViews?.[SECTION_VIEW_KEYS[0]] || "").trim();
+    let selectedPlayerId = orderedIds.includes(currentForSection)
+      ? currentForSection
+      : "";
+    if (!selectedPlayerId && orderedIds.includes(currentGlobal)) {
+      selectedPlayerId = currentGlobal;
+    }
+    if (!selectedPlayerId) {
+      selectedPlayerId = orderedIds[0] || "";
+    }
+    if (selectedPlayerId) {
+      SECTION_VIEW_KEYS.forEach((key) => {
+        sectionPlayerViews[key] = selectedPlayerId;
+      });
+    }
+    const snapshot = getPlayerSnapshotForView(state, selectedPlayerId);
+    const snapshotState = snapshot.state && typeof snapshot.state === "object"
+      ? snapshot.state
+      : state;
+    return {
+      sectionKey,
+      playerIds: orderedIds,
+      playerId: selectedPlayerId,
+      player: snapshot.player,
+      state: snapshotState,
+      editable: selectedPlayerId === String(activePlayerId || ""),
+    };
+  }
+
+  function renderSectionPlayerTabs(stateInput, sectionKeyInput) {
+    const sectionKey = String(sectionKeyInput || "").trim();
+    if (!sectionKey) {
+      return;
+    }
+    const container = document.getElementById(sectionKey + "-player-tabs");
+    if (!container) {
+      return;
+    }
+    const view = getSectionView(stateInput, sectionKey);
+    const ids = Array.isArray(view.playerIds) ? view.playerIds : [];
+    if (ids.length === 0) {
+      container.innerHTML = "";
+      return;
+    }
+    container.innerHTML = ids.map((playerId) => {
+      const isSelected = playerId === view.playerId;
+      const label = playerId === String(activePlayerId || "")
+        ? "You"
+        : (resolvePlayerName(playerId) || playerId);
+      return (
+        '<button type="button" class="section-player-tab' +
+        (isSelected ? " section-player-tab--active" : "") +
+        '" data-action="section-view-player" data-section="' +
+        escapeHtml(sectionKey) +
+        '" data-player-id="' +
+        escapeHtml(playerId) +
+        '">' +
+        escapeHtml(label) +
+        "</button>"
+      );
+    }).join("");
+  }
+
+  function renderAllSectionPlayerTabs(stateInput) {
+    SECTION_VIEW_KEYS.forEach((sectionKey) => {
+      renderSectionPlayerTabs(stateInput, sectionKey);
+    });
+  }
+
+  function isSectionViewingActivePlayer(stateInput, sectionKeyInput) {
+    return getSectionView(stateInput, sectionKeyInput).editable;
+  }
+
   function renderPlayerStateTitle() {
     const titleNode = document.getElementById("player-state-title");
     if (!titleNode) {
       return;
     }
-    const name = resolvePlayerName(activePlayerId);
-    titleNode.textContent = name || "You";
+    titleNode.textContent = "Snapshot";
+  }
+
+  function triggerSectionViewFadeAnimation() {
+    const targetIds = [
+      "journals-container",
+      "workshops-container",
+      "inventions-container",
+      "tools-container",
+    ];
+    targetIds.forEach((id) => {
+      const node = document.getElementById(id);
+      if (!node || !node.classList) {
+        return;
+      }
+      node.classList.remove("section-view-fade");
+      void node.offsetWidth;
+      node.classList.add("section-view-fade");
+    });
   }
 
   function logPlayerAction(message, contextInput) {
@@ -1964,6 +2441,8 @@
     try {
       renderMultiplayerUi();
       renderPlayerStateTitle();
+      const shouldAnimateSectionView = sectionViewTransitionPending;
+      sectionViewTransitionPending = false;
       const state = roundEngineService.getState();
       const started = isGameStarted(state);
       setGameSurfaceVisibility(started);
@@ -1995,9 +2474,9 @@
           if (inventionsContainer) {
             inventionsContainer.innerHTML = "";
           }
-          const toolsPanel = document.getElementById("tools-panel");
-          if (toolsPanel) {
-            toolsPanel.innerHTML = "<h2>Tools</h2><p class='tools-placeholder'>Tools unlock after the game starts.</p>";
+          const toolsContainer = document.getElementById("tools-container");
+          if (toolsContainer) {
+            toolsContainer.innerHTML = "<p class='tools-placeholder'>Tools unlock after the game starts.</p>";
           }
           const summary = document.getElementById("player-state-summary");
           if (summary) {
@@ -2029,7 +2508,11 @@
         inventionHover = null;
         inventionVarietyHover = null;
       }
-      const p1 = (withAutoWorkshopState.players || []).find((player) => player.id === activePlayerId);
+      renderAllSectionPlayerTabs(withAutoWorkshopState);
+      const journalsView = getSectionView(withAutoWorkshopState, "journals");
+      const workshopsView = getSectionView(withAutoWorkshopState, "workshops");
+      const inventionsView = getSectionView(withAutoWorkshopState, "inventions");
+      const toolsView = getSectionView(withAutoWorkshopState, "tools");
       renderPhaseBreadcrumb(withAutoWorkshopState.phase);
       renderFooterWrenchCount(withAutoWorkshopState);
       renderPhaseExpectation(withAutoWorkshopState);
@@ -2065,16 +2548,19 @@
         undoButton.disabled = undoStack.length === 0;
       }
       renderPhaseControls(withAutoWorkshopState);
-      renderPlayerStatePanel(withAutoWorkshopState, p1);
+      renderPlayerStatePanel(withAutoWorkshopState);
       renderRoundRoll(withAutoWorkshopState);
-      renderJournals(withAutoWorkshopState, p1);
-      renderWorkshops(withAutoWorkshopState, p1);
-      renderInventions(withAutoWorkshopState, p1);
-      renderToolsPanel(withAutoWorkshopState, p1);
+      renderJournals(journalsView.state, journalsView.player, journalsView);
+      renderWorkshops(workshopsView.state, workshopsView.player, workshopsView);
+      renderInventions(inventionsView.state, inventionsView.player, inventionsView);
+      renderToolsPanel(toolsView.state, toolsView.player, toolsView);
       maybeAutoScrollToPhaseSection(withAutoWorkshopState);
       updateActiveAnchorFromScroll();
       maybePublishLocalState(withAutoWorkshopState);
       renderMultiplayerUi();
+      if (shouldAnimateSectionView) {
+        triggerSectionViewFadeAnimation();
+      }
     } catch (error) {
       recoverFromRenderCrash(error);
     }
@@ -2688,67 +3174,79 @@
     return isMultiplayerGameActive() && waitingForRoomTurnAdvance;
   }
 
-  function renderPlayerStatePanel(state, player) {
+  function renderPlayerStatePanel(stateInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
     const summary = document.getElementById("player-state-summary");
     if (!summary) {
       return;
     }
-    const available = typeof roundEngineService.getAvailableWrenches === "function"
-      ? roundEngineService.getAvailableWrenches(activePlayerId)
-      : 0;
-    const wrenchTokens = available > 0
-      ? Array.from({ length: Math.min(24, available) }, () => '<span class="wrench-token wrench-token--earned">🔧</span>').join("")
-      : "<span class='journal-muted'>none</span>";
-    const wrenchOverflow = available > 24 ? "<span class='journal-muted'> +" + String(available - 24) + "</span>" : "";
-    const totalScore = Number(player?.totalScore || 0);
-    const toolScore = Number(player?.toolScore || 0);
-    const activeTools = typeof roundEngineService.getActiveTools === "function"
-      ? roundEngineService.getActiveTools(activePlayerId)
-      : [];
-    const unlockedTools = activeTools.filter((tool) => tool.active);
-    const unlockedToolDetailsHtml = unlockedTools.length > 0
-      ? unlockedTools
-          .map((tool) =>
-            "<div><strong>" +
-            String(tool.name || tool.id || "") +
-            ":</strong> " +
-            String(tool.abilityText || "") +
-            "</div>",
-          )
-          .join("")
-      : "";
-    const completedJournals = Number(player?.completedJournals || 0);
-    const currentDay = String(state?.currentDay || "Friday");
+    const orderedPlayerIds = getOrderedPlayerIdsForView(state);
+    const roomPlayers = Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [];
+    const roomById = new Map(roomPlayers.map((player) => [String(player?.playerId || ""), player]));
+    if (orderedPlayerIds.length === 0) {
+      summary.innerHTML = "<p class='journal-muted'>No player data yet.</p>";
+      return;
+    }
+    const rows = orderedPlayerIds.map((playerId) => {
+      const snapshot = getPlayerSnapshotForView(state, playerId);
+      const player = snapshot.player;
+      const roomPlayer = roomById.get(playerId) || null;
+      const totalScore = player ? Number(player.totalScore || 0) : null;
+      const completedJournals = player ? Number(player.completedJournals || 0) : null;
+      const wrenches = player ? computeAvailableWrenchesFromSnapshot(player) : null;
+      const tools = player && Array.isArray(player.unlockedTools) ? player.unlockedTools.length : null;
+      const isOnline = roomPlayer ? Boolean(roomPlayer.connected) : true;
+      const nameLabel = playerId === String(activePlayerId || "")
+        ? "You"
+        : (resolvePlayerName(playerId) || playerId);
+      return (
+        "<tr>" +
+        "<td><span class='player-name-cell'><span class='player-presence-dot " + (isOnline ? "player-presence-dot--online" : "player-presence-dot--offline") + "'></span>" + escapeHtml(nameLabel) + "</span></td>" +
+        "<td>" + (totalScore === null ? "-" : String(totalScore)) + "</td>" +
+        "<td>" + (completedJournals === null ? "-" : String(completedJournals) + "/3") + "</td>" +
+        "<td>" + (wrenches === null ? "-" : String(wrenches)) + "</td>" +
+        "<td>" + (tools === null ? "-" : String(tools)) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
     summary.innerHTML =
-      "<div class='summary-layout'>" +
-      "<div class='summary-info'>" +
-      "<div><strong>Day:</strong> " + currentDay + "</div>" +
-      "<div><strong>Total score:</strong> " + String(totalScore) + "</div>" +
-      "<div><strong>Tool score:</strong> " + String(toolScore) + "</div>" +
-      "<div><strong>Completed journals:</strong> " + String(completedJournals) + "/3</div>" +
-      unlockedToolDetailsHtml +
-      "</div>" +
-      "<div class='summary-wrench-box'><strong>Wrenches</strong><span class='summary-wrenches'>" + wrenchTokens + wrenchOverflow + "</span></div>" +
-      "</div>" +
-      "";
+      "<table class='player-summary-table'>" +
+      "<thead><tr>" +
+      "<th>Player</th>" +
+      "<th>Score</th>" +
+      "<th>Journals</th>" +
+      "<th>Wrenches</th>" +
+      "<th>Tools</th>" +
+      "</tr></thead>" +
+      "<tbody>" + rows + "</tbody>" +
+      "</table>";
   }
 
-  function renderToolsPanel(_state, player) {
-    const container = document.getElementById("tools-panel");
+  function renderToolsPanel(_state, player, viewInput) {
+    const container = document.getElementById("tools-container");
     if (!container) {
       return;
     }
+    if (!player) {
+      container.innerHTML = "<p class='tools-placeholder'>No visible data for this player yet.</p>";
+      return;
+    }
+    const view = viewInput && typeof viewInput === "object" ? viewInput : {};
+    const viewPlayerId = String(view.playerId || activePlayerId || "");
     const catalog = typeof roundEngineService.getActiveTools === "function"
       ? roundEngineService.getActiveTools(activePlayerId)
       : [];
     if (catalog.length === 0) {
-      container.innerHTML = '<h2>Tools</h2><p class="tools-placeholder">No tools configured.</p>';
+      container.innerHTML = '<p class="tools-placeholder">No tools configured.</p>';
       return;
     }
+    const unlockedById = new Set(
+      (Array.isArray(player.unlockedTools) ? player.unlockedTools : [])
+        .map((tool) => String(tool?.id || "")),
+    );
     const cards = catalog
       .map((tool) => {
-        const unlock = tool.unlock;
-        const unlocked = Boolean(tool.active);
+        const unlocked = unlockedById.has(String(tool.id || ""));
         const shape = renderToolShape(tool.pattern);
         return (
           '<article class="tool-card' +
@@ -2770,7 +3268,10 @@
         );
       })
       .join("");
-    container.innerHTML = "<h2>Tools</h2><div class='tool-grid'>" + cards + "</div>";
+    const name = resolvePlayerName(viewPlayerId) || viewPlayerId;
+    container.innerHTML =
+      "<p class='tools-panel-subtitle'>Viewing " + escapeHtml(name) + "</p>" +
+      "<div class='tool-grid'>" + cards + "</div>";
   }
 
   function renderToolShape(patternRows) {
@@ -2854,7 +3355,11 @@
     );
   }
 
-  function renderWorkshops(state, player) {
+  function renderWorkshops(stateInput, player, viewInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const view = viewInput && typeof viewInput === "object" ? viewInput : {};
+    const viewPlayerId = String(view.playerId || activePlayerId || "");
+    const editable = Boolean(view.editable);
     const container = document.getElementById("workshops-container");
     if (!container) {
       return;
@@ -2871,14 +3376,14 @@
       W4: "Mechanical",
     };
     const byId = new Map(player.workshops.map((workshop) => [workshop.id, workshop]));
-    const selection = state.workshopSelections?.[activePlayerId];
+    const selection = state.workshopSelections?.[viewPlayerId];
     const isEurekaWorkshop = state.phase === "workshop" && state.rollAndGroup?.outcomeType === "eureka";
     const allowedWorkshopValues =
-      state.phase === "workshop"
+      editable && state.phase === "workshop"
         ? (
             typeof roundEngineService.getWorkshopNumberChoices === "function"
               ? roundEngineService
-                  .getWorkshopNumberChoices(activePlayerId)
+                  .getWorkshopNumberChoices(viewPlayerId)
                   .map((choice) => Number(choice.usedValue))
               : (Array.isArray(selection?.remainingNumbers)
                   ? selection.remainingNumbers.map((item) => Number(item))
@@ -2894,13 +3399,13 @@
         const cells = Array.isArray(workshop.cells) ? workshop.cells : [];
         const selectedWorkshopId = selection?.selectedWorkshopId || "";
         const hasReamer =
-          typeof roundEngineService.hasTool === "function"
-            ? roundEngineService.hasTool(activePlayerId, "T4")
+          editable && typeof roundEngineService.hasTool === "function"
+            ? roundEngineService.hasTool(viewPlayerId, "T4")
             : false;
         const workshopLockedOut = !isEurekaWorkshop && !hasReamer && Boolean(selectedWorkshopId) && selectedWorkshopId !== workshop.id;
         const activeNumber = Number(selection?.activeNumber);
-        const buildDraft = state.buildDrafts?.[activePlayerId];
-        const isBuildPhase = state.phase === "build";
+        const buildDraft = state.buildDrafts?.[viewPlayerId];
+        const isBuildPhase = editable && state.phase === "build";
         const buildCheatEnabled =
           typeof roundEngineService.isBuildCheatEnabled === "function"
             ? roundEngineService.isBuildCheatEnabled()
@@ -2936,6 +3441,7 @@
                     ? " workshop-cell--v" + String(cell.value)
                     : "";
                 const canMatchActive =
+                  editable &&
                   state.phase === "workshop" &&
                   (isEurekaWorkshop || selection?.selectedGroupKey) &&
                   !workshopLockedOut &&
@@ -2946,6 +3452,7 @@
                     (cell.kind === "number" && allowedWorkshopValues.includes(Number(cell.value)))
                   );
                 const canWrenchPick =
+                  editable &&
                   state.phase === "workshop" &&
                   Boolean(selection?.wrenchPickPending) &&
                   !cell.circled &&
@@ -2972,18 +3479,19 @@
                     (draftWorkshopId === "" && draftPath.length === 0) ||
                     (isDraftWorkshop && (onDraftPath || adjacentToDraft))
                   );
+                const readOnly = !editable;
                 const isDisabled = isBuildPhase
                   ? (!canBuildSelect && !inCommittedMechanism)
-                  : (!cell.circled && !canMatchActive && !canWrenchPick);
+                  : (!cell.circled && !canMatchActive && !canWrenchPick) || readOnly;
                 const shouldVisuallyDim = isBuildPhase
                   ? (!canBuildSelect && !cell.circled && !onDraftPath && !inCommittedMechanism)
-                  : (!cell.circled && !canMatchActive && !canWrenchPick && !inCommittedMechanism);
+                  : (!cell.circled && !canMatchActive && !canWrenchPick && !inCommittedMechanism) || readOnly;
                 return (
                   '<button type="button" class="workshop-cell' +
                   valueClass +
                   (onDraftPath ? " workshop-cell--path" : "") +
                   (inCommittedMechanism ? " workshop-cell--mechanism" : "") +
-                  (state.phase === "workshop" && (canMatchActive || canWrenchPick) ? " workshop-cell--clickable" : "") +
+                  (editable && state.phase === "workshop" && (canMatchActive || canWrenchPick) ? " workshop-cell--clickable" : "") +
                   (canBuildSelect ? " workshop-cell--build-clickable" : "") +
                   (shouldVisuallyDim ? " workshop-cell--disabled" : "") +
                   (cell.circled ? " workshop-cell--circled" : "") +
@@ -3006,7 +3514,7 @@
               .join("");
           })
           .join("");
-        const mechanismLines = renderWorkshopMechanismLines(state, player, workshop.id);
+        const mechanismLines = renderWorkshopMechanismLines(state, player, workshop.id, viewPlayerId);
         const workshopIdeas = getWorkshopIdeasForRender(workshop);
         const ideasLayer = renderWorkshopIdeasLayer(workshopIdeas);
         return (
@@ -3078,7 +3586,7 @@
       .join("");
   }
 
-  function renderWorkshopMechanismLines(state, player, workshopId) {
+  function renderWorkshopMechanismLines(state, player, workshopId, viewPlayerIdInput) {
     const workshop = player.workshops.find((item) => item.id === workshopId);
     if (!workshop) {
       return "";
@@ -3096,7 +3604,8 @@
         }
       });
     });
-    const draft = state.buildDrafts?.[activePlayerId];
+    const viewPlayerId = String(viewPlayerIdInput || activePlayerId || "");
+    const draft = state.buildDrafts?.[viewPlayerId];
     if (draft?.workshopId === workshopId && Array.isArray(draft.path)) {
       const edgeIds = typeof roundEngineService.selectionToEdgeIds === "function"
         ? roundEngineService.selectionToEdgeIds(draft.path)
@@ -3146,7 +3655,11 @@
     };
   }
 
-  function renderJournals(state, player) {
+  function renderJournals(stateInput, player, viewInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const view = viewInput && typeof viewInput === "object" ? viewInput : {};
+    const viewPlayerId = String(view.playerId || activePlayerId || "");
+    const editable = Boolean(view.editable);
     const container = document.getElementById("journals-container");
     if (!container) {
       return;
@@ -3162,7 +3675,7 @@
       const cellMeta = Array.isArray(journal.cellMeta) ? journal.cellMeta : [];
       const rowWrenches = Array.isArray(journal.rowWrenches) ? journal.rowWrenches : [];
       const columnWrenches = Array.isArray(journal.columnWrenches) ? journal.columnWrenches : [];
-      const playerSelection = state.journalSelections?.[activePlayerId];
+      const playerSelection = state.journalSelections?.[viewPlayerId];
       const activeJournalId = playerSelection?.selectedJournalId || "";
       const activeNumber = Number(playerSelection?.activeNumber);
       const hasActiveNumber = Number.isInteger(activeNumber);
@@ -3183,10 +3696,11 @@
               const gridColumn = columnIndex < 2 ? columnIndex + 1 : columnIndex + 2;
               const gridRow = rowIndex < 2 ? rowIndex + 1 : rowIndex + 2;
               const clickable =
-                playerSelection?.selectedGroupKey && !isJournalLockedOut
+                editable && playerSelection?.selectedGroupKey && !isJournalLockedOut
                   ? " journal-cell--clickable"
                   : "";
               const shouldValidate =
+                editable &&
                 playerSelection?.selectedGroupKey &&
                 hasActiveNumber &&
                 !isJournalLockedOut;
@@ -3194,6 +3708,7 @@
                 ? roundEngineService.validateJournalPlacement(journal, rowIndex, columnIndex, activeNumber)
                 : { ok: true };
               const isDisabled =
+                !editable ||
                 isJournalLockedOut ||
                 !playerSelection?.selectedGroupKey ||
                 (shouldValidate && !validation.ok);
@@ -3311,7 +3826,11 @@
     container.innerHTML = journalsHtml.join("");
   }
 
-  function renderInventions(state, player) {
+  function renderInventions(stateInput, player, viewInput) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const view = viewInput && typeof viewInput === "object" ? viewInput : {};
+    const viewPlayerId = String(view.playerId || activePlayerId || "");
+    const editable = Boolean(view.editable);
     const container = document.getElementById("inventions-container");
     if (!container) {
       return;
@@ -3321,9 +3840,9 @@
       return;
     }
     const inventions = getPlayerInventionsForRender(player);
-    const pendingMechanism = state.phase === "invent" &&
+    const pendingMechanism = editable && state.phase === "invent" &&
       typeof roundEngineService.getPendingMechanismForInvent === "function"
-      ? roundEngineService.getPendingMechanismForInvent(activePlayerId)
+      ? roundEngineService.getPendingMechanismForInvent(viewPlayerId)
       : null;
     const cards = inventions
       .map((invention) => {
@@ -3377,13 +3896,14 @@
         );
         const connectionMap = buildInventionConnectionMap(placements);
         const preview =
+          editable &&
           state.phase === "invent" &&
           pendingMechanism &&
           inventionHover &&
           inventionHover.inventionId === invention.id &&
           typeof roundEngineService.computeInventionPlacementPreview === "function"
             ? roundEngineService.computeInventionPlacementPreview(
-                activePlayerId,
+                viewPlayerId,
                 invention.id,
                 inventionHover.row,
                 inventionHover.col,
@@ -3392,7 +3912,7 @@
         const pattern = renderInventionPattern(invention.pattern, {
           inventionId: invention.id,
           preview,
-          interactive: state.phase === "invent" && Boolean(pendingMechanism),
+          interactive: editable && state.phase === "invent" && Boolean(pendingMechanism),
           occupiedKeys,
           connectionMap,
           highlightedKeys: activeVarietyType ? highlightedPlacementKeys : null,
@@ -4143,8 +4663,41 @@
     }
   });
 
+  SECTION_VIEW_KEYS.forEach((sectionKey) => {
+    const tabsNode = document.getElementById(sectionKey + "-player-tabs");
+    if (!tabsNode) {
+      return;
+    }
+    tabsNode.addEventListener("click", function onSectionPlayerTabClick(event) {
+      const target = event.target;
+      if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
+        return;
+      }
+      const button = target.closest("button[data-action='section-view-player']");
+      if (!button) {
+        return;
+      }
+      const nextSection = String(button.getAttribute("data-section") || "").trim();
+      const nextPlayerId = String(button.getAttribute("data-player-id") || "").trim();
+      if (!SECTION_VIEW_KEYS.includes(nextSection) || !nextPlayerId) {
+        return;
+      }
+      SECTION_VIEW_KEYS.forEach((key) => {
+        sectionPlayerViews[key] = nextPlayerId;
+      });
+      sectionViewTransitionPending = true;
+      inventionHover = null;
+      inventionVarietyHover = null;
+      renderState();
+    });
+  });
+
   document.getElementById("journals-container").addEventListener("click", function onJournalClick(event) {
     if (isInteractionBlocked()) {
+      return;
+    }
+    const state = roundEngineService.getState();
+    if (!isSectionViewingActivePlayer(state, "journals")) {
       return;
     }
     const target = event.target;
@@ -4188,6 +4741,10 @@
     if (isInteractionBlocked()) {
       return;
     }
+    const state = roundEngineService.getState();
+    if (!isSectionViewingActivePlayer(state, "workshops")) {
+      return;
+    }
     const target = event.target;
     if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
       return;
@@ -4199,7 +4756,6 @@
     const workshopId = button.getAttribute("data-workshop-id");
     const rowIndex = Number(button.getAttribute("data-row-index"));
     const columnIndex = Number(button.getAttribute("data-column-index"));
-    const state = roundEngineService.getState();
     logPlayerAction("Selected workshop cell", {
       action: state.phase === "build" ? "build-select-cell" : "workshop-place-part",
       workshopId,
@@ -4240,9 +4796,13 @@
       hideWorkshopTooltip();
       return;
     }
-    const state = roundEngineService.getState();
-    const player = (state.players || []).find((item) => item.id === activePlayerId);
-    renderMechanismUsageTooltip(state, player, mechanismId, button);
+    const currentState = roundEngineService.getState();
+    const workshopView = getSectionView(currentState, "workshops");
+    if (!workshopView.player) {
+      hideWorkshopTooltip();
+      return;
+    }
+    renderMechanismUsageTooltip(workshopView.state, workshopView.player, mechanismId, button);
   });
 
   document.getElementById("workshops-container").addEventListener("mouseleave", function onWorkshopLeave() {
@@ -4254,8 +4814,9 @@
     if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
       return;
     }
-    const state = roundEngineService.getState();
-    if (state.phase !== "invent") {
+    const currentState = roundEngineService.getState();
+    const inventionsView = getSectionView(currentState, "inventions");
+    if (!inventionsView.editable || inventionsView.state.phase !== "invent") {
       return;
     }
     if (typeof roundEngineService.getPendingMechanismForInvent === "function" &&
@@ -4266,8 +4827,7 @@
     if (!cell) {
       if (inventionHover) {
         inventionHover = null;
-        const player = (state.players || []).find((item) => item.id === activePlayerId);
-        renderInventions(state, player);
+        renderInventions(inventionsView.state, inventionsView.player, inventionsView);
       }
       return;
     }
@@ -4285,8 +4845,7 @@
       return;
     }
     inventionHover = nextHover;
-    const player = (state.players || []).find((item) => item.id === activePlayerId);
-    renderInventions(state, player);
+    renderInventions(inventionsView.state, inventionsView.player, inventionsView);
   });
 
   document.getElementById("inventions-container").addEventListener("mouseover", function onInventionTypeHover(event) {
@@ -4313,9 +4872,9 @@
       return;
     }
     inventionVarietyHover = nextHover;
-    const state = roundEngineService.getState();
-    const player = (state.players || []).find((item) => item.id === activePlayerId);
-    renderInventions(state, player);
+    const currentState = roundEngineService.getState();
+    const inventionsView = getSectionView(currentState, "inventions");
+    renderInventions(inventionsView.state, inventionsView.player, inventionsView);
   });
 
   document.getElementById("inventions-container").addEventListener("mouseout", function onInventionTypeLeave(event) {
@@ -4338,9 +4897,9 @@
       }
     }
     inventionVarietyHover = null;
-    const state = roundEngineService.getState();
-    const player = (state.players || []).find((item) => item.id === activePlayerId);
-    renderInventions(state, player);
+    const currentState = roundEngineService.getState();
+    const inventionsView = getSectionView(currentState, "inventions");
+    renderInventions(inventionsView.state, inventionsView.player, inventionsView);
   });
 
   document.getElementById("inventions-container").addEventListener("mouseleave", function onInventionLeave() {
@@ -4351,13 +4910,17 @@
     }
     inventionHover = null;
     inventionVarietyHover = null;
-    const state = roundEngineService.getState();
-    const player = (state.players || []).find((item) => item.id === activePlayerId);
-    renderInventions(state, player);
+    const currentState = roundEngineService.getState();
+    const inventionsView = getSectionView(currentState, "inventions");
+    renderInventions(inventionsView.state, inventionsView.player, inventionsView);
   });
 
   document.getElementById("inventions-container").addEventListener("click", function onInventionClick(event) {
     if (isInteractionBlocked()) {
+      return;
+    }
+    const state = roundEngineService.getState();
+    if (!isSectionViewingActivePlayer(state, "inventions")) {
       return;
     }
     const target = event.target;
@@ -4371,7 +4934,6 @@
     if (!cell) {
       return;
     }
-    const state = roundEngineService.getState();
     if (state.phase !== "invent") {
       return;
     }

@@ -32,10 +32,12 @@
         renderMultiplayerUi();
         return;
       }
-      clearMultiplayerSessionIdentity();
+      clearMultiplayerSessionIdentity({ preserveHomeStep: true });
       gameStateService.update({ gameStarted: false });
       multiplayerState.roomCode = requestedRoomCode;
       persistMultiplayerState();
+      setHomeStep("waitroom");
+      renderMultiplayerUi();
       await ensureMultiplayerConnection();
       const payload = {
         roomCode: multiplayerState.roomCode,
@@ -45,6 +47,7 @@
       const sent = multiplayerClient.send("join_room", payload);
       if (!sent) {
         multiplayerState.lastError = "not_connected";
+        setHomeStep("room-list");
         renderMultiplayerUi();
       }
       refreshRoomDirectory(true);
@@ -89,9 +92,11 @@
           const nameInput = documentRef?.getElementById("mp-name");
           multiplayerState.name = String(nameInput?.value || "").trim();
           multiplayerState.lastError = "";
-          clearMultiplayerSessionIdentity();
+          clearMultiplayerSessionIdentity({ preserveHomeStep: true });
           gameStateService.update({ gameStarted: false });
           persistMultiplayerState();
+          setHomeStep("waitroom");
+          renderMultiplayerUi();
           await ensureMultiplayerConnection();
           const sent = multiplayerClient.send("create_room", {
             name: multiplayerState.name || "Host",
@@ -99,6 +104,7 @@
           });
           if (!sent) {
             multiplayerState.lastError = "not_connected";
+            setHomeStep("multiplayer");
           }
           renderMultiplayerUi();
           refreshRoomDirectory(true);
