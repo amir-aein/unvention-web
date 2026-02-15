@@ -21,6 +21,13 @@ function createBaseState() {
     gameStatus: 'active',
     gameStarted: true,
     activePlayerId: 'P1',
+    gameConfig: {
+      journalCount: 3,
+      workshopCount: 4,
+      ruleset: null,
+      modId: 'classic',
+      setupSteps: [],
+    },
     players: [],
     rngSeed: 'default-seed',
     rngState: 3288473048,
@@ -29,6 +36,7 @@ function createBaseState() {
     workshopPhaseContext: {},
     buildDrafts: {},
     buildDecisions: {},
+    setupPlan: null,
     turnToolUsage: {},
     inventTransforms: {},
     toolUnlockRegistry: {},
@@ -95,11 +103,11 @@ function createConfiguredHarness(config = {}) {
   });
 
   const playerIds = Array.isArray(config.playerIds) ? config.playerIds : ['P1'];
-  if (playerIds.length > 0) {
-    harness.engine.initializePlayers(playerIds);
-  }
   if (config.seed) {
     harness.engine.setSeed(config.seed);
+  }
+  if (playerIds.length > 0) {
+    harness.engine.initializePlayers(playerIds);
   }
 
   return harness;

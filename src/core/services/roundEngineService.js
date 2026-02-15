@@ -1,5 +1,11 @@
 (function attachRoundEngineService(globalScope) {
   const root = globalScope.Unvention || (globalScope.Unvention = {});
+  if (typeof root.SetupPipelineService !== "function" && typeof require === "function") {
+    try {
+      delete require.cache[require.resolve("./setupPipelineService.js")];
+      require("./setupPipelineService.js");
+    } catch (_error) {}
+  }
 
   const PHASES = [
     "roll_and_group",
@@ -19,6 +25,7 @@
   const JOURNAL_SIZE = 4;
   const WORKSHOP_COUNT = 4;
   const WORKSHOP_SIZE = 5;
+  const DEFAULT_MOD_ID = "classic";
   const INVENTION_TEMPLATES = [
     {
       id: "I1",
@@ -188,6 +195,12 @@
       { row: 3, col: 2 },
     ],
   };
+  const WORKSHOP_DISPLAY_NAMES = {
+    W1: "Hydraulic",
+    W2: "Magnetic",
+    W3: "Electrical",
+    W4: "Mechanical",
+  };
 
   function getWorkshopLayoutsForSeed(_seed) {
     // Intentionally fixed for now; later this can return a deterministic
@@ -203,6 +216,37 @@
     return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
   }
 
+  function normalizeModId(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text || DEFAULT_MOD_ID;
+  }
+
+  function normalizeSetupSteps(input) {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    return input
+      .map((entry) => {
+        const candidate = entry && typeof entry === "object" ? entry : {};
+        const id = String(candidate.id || "").trim();
+        if (!id) {
+          return null;
+        }
+        const params = candidate.params && typeof candidate.params === "object"
+          ? JSON.parse(JSON.stringify(candidate.params))
+          : {};
+        const enabled = Object.prototype.hasOwnProperty.call(candidate, "enabled")
+          ? Boolean(candidate.enabled)
+          : true;
+        return {
+          id,
+          enabled,
+          params,
+        };
+      })
+      .filter(Boolean);
+  }
+
   function normalizeGameConfig(input) {
     const candidate = input && typeof input === "object" ? input : {};
     const customRuleset = candidate.ruleset && typeof candidate.ruleset === "object"
@@ -215,6 +259,8 @@
       journalCount: normalizeCount(candidate.journalCount, JOURNAL_COUNT, 1, 6),
       workshopCount: normalizeCount(candidate.workshopCount, WORKSHOP_COUNT, 1, maxWorkshopCount),
       ruleset: customRuleset,
+      modId: normalizeModId(candidate.modId),
+      setupSteps: normalizeSetupSteps(candidate.setupSteps),
     };
   }
 
@@ -223,6 +269,9 @@
       this.gameStateService = gameStateService;
       this.loggerService = loggerService;
       this.diceRoller = typeof diceRoller === "function" ? diceRoller : this.defaultDiceRoller;
+      this.setupPipelineService = typeof root.SetupPipelineService === "function"
+        ? new root.SetupPipelineService()
+        : null;
     }
 
     getState() {
@@ -296,6 +345,67 @@
         criterionLabel: template.criterionLabel,
         pattern: template.pattern.map((row) => String(row)),
       }));
+    }
+
+    getDefaultSetupPlan(stateInput) {
+      if (!this.setupPipelineService) {
+        return {
+          modId: DEFAULT_MOD_ID,
+          fingerprint: "",
+          steps: [],
+        };
+      }
+      const state = stateInput || this.gameStateService.getState();
+      const config = this.getGameConfig(state);
+      return this.setupPipelineService.createPlan({
+        rngSeed: state.rngSeed,
+        gameConfig: config,
+        workshopIds: this.getWorkshopIds({ gameConfig: config }),
+        inventionIds: this.getDefaultInventionCatalog().map((item) => item.id),
+      });
+    }
+
+    getSetupPlanFingerprint(stateInput) {
+      if (!this.setupPipelineService) {
+        return "";
+      }
+      const state = stateInput || this.gameStateService.getState();
+      const config = this.getGameConfig(state);
+      return this.setupPipelineService.getPlanFingerprint({
+        rngSeed: state.rngSeed,
+        gameConfig: config,
+        workshopIds: this.getWorkshopIds({ gameConfig: config }),
+        inventionIds: this.getDefaultInventionCatalog().map((item) => item.id),
+      });
+    }
+
+    resolveSetupPlan(stateInput) {
+      const state = stateInput || this.gameStateService.getState();
+      const expectedFingerprint = this.getSetupPlanFingerprint(state);
+      const currentPlan = state.setupPlan && typeof state.setupPlan === "object"
+        ? JSON.parse(JSON.stringify(state.setupPlan))
+        : null;
+      if (currentPlan && currentPlan.fingerprint === expectedFingerprint) {
+        return currentPlan;
+      }
+      const next = this.getDefaultSetupPlan(state);
+      return {
+        modId: String(next.modId || DEFAULT_MOD_ID),
+        fingerprint: String(next.fingerprint || expectedFingerprint),
+        steps: Array.isArray(next.steps) ? next.steps : [],
+      };
+    }
+
+    applySetupPlanToPlayer(playerInput, setupPlanInput) {
+      if (!this.setupPipelineService) {
+        return playerInput;
+      }
+      const setupPlan = setupPlanInput && typeof setupPlanInput === "object"
+        ? setupPlanInput
+        : this.resolveSetupPlan();
+      return this.setupPipelineService.applyPlanToPlayer(playerInput, setupPlan, {
+        countWorkshopPartsByNumber: (cells) => this.countWorkshopPartsByNumber(cells),
+      });
     }
 
     getDefaultToolCatalog() {
@@ -1855,6 +1965,11 @@
       }
 
       const state = this.gameStateService.getState();
+      const config = this.getGameConfig(state);
+      const setupPlan = this.resolveSetupPlan(state);
+      const setupPlanChanged =
+        String(state.setupPlan?.fingerprint || "") !== String(setupPlan.fingerprint || "") ||
+        !Array.isArray(state.setupPlan?.steps);
       const players = Array.isArray(state.players) ? [...state.players] : [];
       let changed = false;
 
@@ -1864,33 +1979,53 @@
           return;
         }
         if (!players.some((player) => player.id === playerId)) {
-          players.push(this.createDefaultPlayer(playerId));
+          players.push(this.createDefaultPlayer(playerId, { config, setupPlan }));
           changed = true;
         }
       });
 
-      if (!changed) {
+      if (!changed && !setupPlanChanged) {
         return state;
       }
 
-      const updated = this.gameStateService.update({ players });
-      this.loggerService.logEvent("info", "Players initialized", {
-        playerIds: ids,
-      });
+      const payload = { players };
+      if (setupPlanChanged) {
+        payload.setupPlan = setupPlan;
+      }
+      const updated = this.gameStateService.update(payload);
+      if (changed) {
+        const setupSummary = this.getSetupRandomizationSummary(setupPlan);
+        if (setupSummary) {
+          this.loggerService.logEvent("info", setupSummary.message, setupSummary.context);
+        }
+        this.loggerService.logEvent("info", "Players initialized", {
+          playerIds: ids,
+          modId: String(config.modId || DEFAULT_MOD_ID),
+        });
+      }
       return updated;
     }
 
     setSeed(seedInput) {
+      const state = this.gameStateService.getState();
       const seed = String(seedInput || "").trim() || "default-seed";
       const hashed = this.hashSeed(seed);
-      const updated = this.gameStateService.update({
+      const hasPlayers = Array.isArray(state.players) && state.players.length > 0;
+      const payload = {
         rngSeed: seed,
         rngState: hashed,
-      });
+      };
+      if (!hasPlayers) {
+        payload.setupPlan = null;
+      }
+      const updated = this.gameStateService.update(payload);
 
-      this.loggerService.logEvent("info", "RNG seed updated", {
-        seed,
-      });
+      if (hasPlayers || state.gameStarted) {
+        this.loggerService.logEvent("info", "RNG seed updated", {
+          seed,
+          resetSetupPlan: !hasPlayers,
+        });
+      }
       return updated;
     }
 
@@ -1920,9 +2055,12 @@
       return updated;
     }
 
-    createDefaultPlayer(playerId) {
-      const config = this.getGameConfig();
-      return {
+    createDefaultPlayer(playerId, optionsInput) {
+      const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+      const config = options.config && typeof options.config === "object"
+        ? options.config
+        : this.getGameConfig();
+      const basePlayer = {
         id: playerId,
         completedJournals: 0,
         spentWrenches: 0,
@@ -1940,6 +2078,10 @@
           this.createDefaultWorkshop(index + 1),
         ),
       };
+      const setupPlan = options.setupPlan && typeof options.setupPlan === "object"
+        ? options.setupPlan
+        : this.resolveSetupPlan();
+      return this.applySetupPlanToPlayer(basePlayer, setupPlan);
     }
 
     createDefaultJournal(journalNumber) {
@@ -2002,6 +2144,76 @@
         }
       }
       return catalog[0];
+    }
+
+    getWorkshopDisplayName(workshopIdInput) {
+      const workshopId = String(workshopIdInput || "");
+      return WORKSHOP_DISPLAY_NAMES[workshopId] || workshopId || "Unknown";
+    }
+
+    getSetupRandomizationSummary(setupPlanInput) {
+      const setupPlan = setupPlanInput && typeof setupPlanInput === "object" ? setupPlanInput : {};
+      const steps = Array.isArray(setupPlan.steps) ? setupPlan.steps : [];
+      const stepById = new Map(steps.map((step) => [String(step?.id || ""), step]));
+      const fragments = [];
+      const context = {
+        modId: String(setupPlan.modId || DEFAULT_MOD_ID),
+      };
+
+      const multiplierStep = stepById.get("random_invention_multiplier");
+      const multiplierArtifact = multiplierStep?.artifact && typeof multiplierStep.artifact === "object"
+        ? multiplierStep.artifact
+        : null;
+      const inventionId = String(multiplierArtifact?.inventionId || "");
+      if (inventionId) {
+        const invention = this.getDefaultInventionCatalog().find((item) => String(item.id) === inventionId);
+        const multiplier = Math.max(1, Math.min(6, Math.floor(Number(multiplierArtifact?.multiplier || 2))));
+        const inventionName = String(invention?.name || inventionId);
+        fragments.push(inventionName + " starts at x" + String(multiplier) + " multiplier");
+        context.ideaBoost = {
+          inventionId,
+          inventionName,
+          multiplier,
+        };
+      }
+
+      const randomIdeasStep = stepById.get("random_workshop_ideas");
+      const randomizedWorkshops = randomIdeasStep?.artifact?.workshopSeedsById &&
+        typeof randomIdeasStep.artifact.workshopSeedsById === "object"
+        ? Object.keys(randomIdeasStep.artifact.workshopSeedsById).filter((id) => String(id || "").trim().length > 0)
+        : [];
+      if (randomizedWorkshops.length > 0) {
+        fragments.push("idea positions were randomized in all workshops");
+        context.randomizedWorkshopIdeas = randomizedWorkshops;
+      }
+
+      const removeStep = stepById.get("remove_parts_by_value");
+      const removals = Array.isArray(removeStep?.artifact?.removals) ? removeStep.artifact.removals : [];
+      if (removals.length > 0) {
+        const removalText = removals
+          .map((entry) => {
+            const value = Math.max(1, Math.min(6, Math.floor(Number(entry?.value || 1))));
+            const workshopId = String(entry?.workshopId || "");
+            const workshopName = this.getWorkshopDisplayName(workshopId);
+            return String(value) + "s were removed from " + workshopName + " workshop";
+          })
+          .join(", ");
+        fragments.push(removalText);
+        context.partRemovals = removals.map((entry) => ({
+          workshopId: String(entry?.workshopId || ""),
+          workshopName: this.getWorkshopDisplayName(entry?.workshopId),
+          value: Math.max(1, Math.min(6, Math.floor(Number(entry?.value || 1)))),
+        }));
+      }
+
+      if (fragments.length === 0) {
+        return null;
+      }
+
+      return {
+        message: "Variable setup randomized: " + fragments.join(". ") + ".",
+        context,
+      };
     }
 
     ensurePlayerInventions() {

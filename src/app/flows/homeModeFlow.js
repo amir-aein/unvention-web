@@ -17,6 +17,10 @@
     const getSelectedGameMode = deps.getSelectedGameMode;
     const setSelectedGameMode = deps.setSelectedGameMode;
     const persistHomeUiState = deps.persistHomeUiState;
+    const getVariableSetupSelection = deps.getVariableSetupSelection || function fallbackGetVariableSetupSelection() {
+      return { order: true, idea: true, parts: true };
+    };
+    const setVariableSetupSelection = deps.setVariableSetupSelection || function fallbackSetVariableSetupSelection() {};
 
     async function joinMultiplayerRoomByCode(requestedRoomCodeInput) {
       const nameInput = documentRef?.getElementById("mp-name");
@@ -150,6 +154,34 @@
           joinMultiplayerRoomByCode(roomCode);
         });
       }
+
+      const variableSetupInputIds = [
+        "var-setup-order-mode",
+        "var-setup-idea-mode",
+        "var-setup-parts-mode",
+        "var-setup-order-multiplayer",
+        "var-setup-idea-multiplayer",
+        "var-setup-parts-multiplayer",
+      ];
+      variableSetupInputIds.forEach((id) => {
+        const input = documentRef?.getElementById(id);
+        if (!input) {
+          return;
+        }
+        input.addEventListener("change", function onVariableSetupChange() {
+          const option = String(input.getAttribute("data-variable-setup-option") || "").trim();
+          if (!option) {
+            return;
+          }
+          const current = getVariableSetupSelection();
+          setVariableSetupSelection({
+            ...current,
+            [option]: Boolean(input.checked),
+          });
+          persistHomeUiState();
+          renderMultiplayerUi();
+        });
+      });
     }
 
     return {

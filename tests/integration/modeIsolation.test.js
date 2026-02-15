@@ -44,7 +44,13 @@ function buildHarness() {
     players: [],
     rngSeed: 'default-seed',
     rngState: 3288473048,
-    gameConfig: { journalCount: 3, workshopCount: 4, ruleset: null },
+    gameConfig: {
+      journalCount: 3,
+      workshopCount: 4,
+      ruleset: null,
+      modId: 'classic',
+      setupSteps: [],
+    },
     rollAndGroup: {
       dice: [],
       outcomeType: null,

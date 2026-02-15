@@ -68,6 +68,44 @@ function grantTool(harness, playerId, toolId) {
   harness.engine.gameStateService.update({ players: state.players });
 }
 
+function areIdeaAnchorsAdjacent(anchorAInput, anchorBInput) {
+  const anchorA = anchorAInput && typeof anchorAInput === 'object' ? anchorAInput : {};
+  const anchorB = anchorBInput && typeof anchorBInput === 'object' ? anchorBInput : {};
+  const rowDelta = Math.abs(Number(anchorA.row) - Number(anchorB.row));
+  const colDelta = Math.abs(Number(anchorA.col) - Number(anchorB.col));
+  return rowDelta <= 1 && colDelta <= 1 && (rowDelta + colDelta > 0);
+}
+
+function groupIdeaAnchors(anchorsInput) {
+  const anchors = Array.isArray(anchorsInput) ? anchorsInput : [];
+  const visited = new Set();
+  const groups = [];
+  for (let index = 0; index < anchors.length; index += 1) {
+    if (visited.has(index)) {
+      continue;
+    }
+    const queue = [index];
+    const members = [];
+    visited.add(index);
+    while (queue.length > 0) {
+      const currentIndex = queue.shift();
+      members.push(anchors[currentIndex]);
+      for (let probe = 0; probe < anchors.length; probe += 1) {
+        if (visited.has(probe)) {
+          continue;
+        }
+        if (!areIdeaAnchorsAdjacent(anchors[currentIndex], anchors[probe])) {
+          continue;
+        }
+        visited.add(probe);
+        queue.push(probe);
+      }
+    }
+    groups.push(members);
+  }
+  return groups;
+}
+
 test('RoundEngineService advances through standard phase order', () => {
   const harness = createHarness({}, () => [1, 3, 5, 5, 6]);
   harness.engine.initializePlayers(['P1']);
@@ -257,6 +295,85 @@ test('RoundEngineService initializes players with configured journal/workshop co
   assert.equal(p1.journals.length, 2);
   assert.equal(p1.workshops.length, 3);
   assert.deepEqual(Object.keys(p1.inventions[0].workshopTypeMarks), ['W1', 'W2', 'W3']);
+});
+
+test('RoundEngineService applies deterministic variable setup plan', () => {
+  const config = {
+    gameConfig: {
+      modId: 'variable_setup',
+    },
+  };
+  const harnessA = createHarness(config);
+  harnessA.engine.setSeed('variable-seed-a');
+  harnessA.engine.initializePlayers(['P1']);
+  const stateA = harnessA.getState();
+  const playerA = stateA.players.find((player) => player.id === 'P1');
+
+  const harnessB = createHarness(config);
+  harnessB.engine.setSeed('variable-seed-a');
+  harnessB.engine.initializePlayers(['P1']);
+  const stateB = harnessB.getState();
+  const playerB = stateB.players.find((player) => player.id === 'P1');
+
+  assert.ok(stateA.setupPlan);
+  assert.equal(stateA.setupPlan.modId, 'variable_setup');
+  assert.deepEqual(stateA.setupPlan, stateB.setupPlan);
+  assert.deepEqual(
+    playerA.inventions.map((item) => ({ id: item.id, multiplier: item.multiplier })),
+    playerB.inventions.map((item) => ({ id: item.id, multiplier: item.multiplier })),
+  );
+  assert.deepEqual(
+    playerA.workshops.map((item) => item.cells),
+    playerB.workshops.map((item) => item.cells),
+  );
+  assert.deepEqual(
+    playerA.workshops.map((item) => item.ideas),
+    playerB.workshops.map((item) => item.ideas),
+  );
+  assert.ok(stateA.setupPlan.steps.some((step) => step.id === 'workshop_layout_order'));
+  assert.ok(stateA.setupPlan.steps.some((step) => step.id === 'random_workshop_ideas'));
+  assert.ok(stateA.setupPlan.steps.some((step) => step.id === 'random_invention_multiplier'));
+  assert.ok(stateA.setupPlan.steps.some((step) => step.id === 'remove_parts_by_value'));
+  assert.equal(playerA.inventions.filter((item) => Number(item.multiplier) === 2).length, 1);
+  playerA.workshops.forEach((workshop) => {
+    const ideas = Array.isArray(workshop.ideas) ? workshop.ideas : [];
+    const uniqueKeys = new Set(ideas.map((idea) => String(idea.row) + ':' + String(idea.col)));
+    assert.equal(ideas.length, 5);
+    assert.equal(uniqueKeys.size, 5);
+    const groups = groupIdeaAnchors(ideas);
+    const groupSizes = groups.map((group) => group.length).sort((left, right) => left - right);
+    assert.deepEqual(groupSizes, [1, 2, 2]);
+  });
+});
+
+test('RoundEngineService allows overriding setup steps per game config', () => {
+  const harness = createHarness({
+    gameConfig: {
+      modId: 'variable_setup',
+      setupSteps: [
+        {
+          id: 'random_invention_multiplier',
+          enabled: false,
+        },
+        {
+          id: 'remove_parts_by_value',
+          enabled: true,
+          params: { count: 1 },
+        },
+      ],
+    },
+  });
+  harness.engine.setSeed('variable-seed-b');
+  harness.engine.initializePlayers(['P1']);
+  const state = harness.getState();
+  const player = state.players.find((entry) => entry.id === 'P1');
+
+  assert.ok(state.setupPlan);
+  assert.equal(player.inventions.every((item) => Number(item.multiplier) === 1), true);
+  const removeStep = state.setupPlan.steps.find((step) => step.id === 'remove_parts_by_value');
+  assert.ok(removeStep);
+  assert.equal(Array.isArray(removeStep.artifact?.removals), true);
+  assert.equal(removeStep.artifact.removals.length, 1);
 });
 
 test('RoundEngineService clamps completed journals to configured count', () => {
