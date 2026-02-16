@@ -5,10 +5,13 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test",
+    "test:multirooms": "node --test tests/integration/multiRoomSwitching.test.js",
     "test:watch": "node --test --watch",
     "simulate": "node sim/runner.js",
     "server": "node server/index.js",
-    "server:smoke": "node server/smoke.js"
+    "server:smoke": "node server/smoke.js",
+    "ui:screenshot": "bash tools/capture-ui-screenshot.sh",
+    "ui:check": "npm run ui:screenshot && npm test"
   },
   "dependencies": {
     "ws": "^8.18.1"

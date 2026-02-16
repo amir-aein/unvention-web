@@ -46,7 +46,7 @@ const httpServer = http.createServer((req, res) => {
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type",
     });
     res.end();
@@ -93,6 +93,21 @@ const httpServer = http.createServer((req, res) => {
     const beforeSequence = parsePositiveInt(url?.searchParams?.get("before"), 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = parsePositiveInt(url?.searchParams?.get("limit"), DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT);
     const payload = buildProfileHistoryPayload(profileToken, beforeSequence, limit);
+    if (!payload) {
+      sendJson(res, 404, { ok: false, error: "profile_not_found" });
+      return;
+    }
+    sendJson(res, 200, payload);
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/profile/reset") {
+    const profileToken = String(url?.searchParams?.get("profileToken") || "");
+    if (!profileToken) {
+      sendJson(res, 400, { ok: false, error: "missing_profile_token" });
+      return;
+    }
+    const payload = resetActiveRoomsForProfile(profileToken);
     if (!payload) {
       sendJson(res, 404, { ok: false, error: "profile_not_found" });
       return;
@@ -295,50 +310,17 @@ function onJoinRoom(ws, message) {
   if (reconnectToken) {
     const player = room.players.find((item) => item.reconnectToken === reconnectToken);
     if (player && Date.now() <= Number(player.canReconnectUntil || 0)) {
-      const previousConnectionId = String(player.connectionId || "");
-      if (previousConnectionId && previousConnectionId !== ws.meta.connectionId) {
-        const previousSocket = connectionsById.get(previousConnectionId);
-        if (previousSocket) {
-          previousSocket.meta.roomCode = null;
-          previousSocket.meta.playerId = null;
-          previousSocket.meta.profileId = null;
-          try {
-            previousSocket.close(4001, "Reconnected from another tab");
-          } catch (_error) {}
-        }
-      }
-      player.connected = true;
-      player.connectionId = ws.meta.connectionId;
-      player.lastSeenAt = Date.now();
-      player.canReconnectUntil = Date.now() + RECONNECT_WINDOW_MS;
-      if (!room.playerProfiles || typeof room.playerProfiles !== "object") {
-        room.playerProfiles = {};
-      }
-      if (player.profileId) {
-        room.playerProfiles[player.playerId] = player.profileId;
-      }
-      ws.meta.roomCode = room.code;
-      ws.meta.playerId = player.playerId;
-      ws.meta.profileId = player.profileId || null;
-      if (player.profileId) {
-        trackProfileRoomVisit(player.profileId, room.code, {
-          playerId: player.playerId,
-          playerName: player.name,
-          roomStatus: room.status,
-        });
-      }
-      appendActionLog(room.code, "reconnect_player", {
-        playerId: player.playerId,
-        profileId: player.profileId || null,
-      });
-      send(ws, "room_joined", {
-        roomCode: room.code,
-        playerId: player.playerId,
-        reconnectToken: player.reconnectToken,
-        profileId: player.profileId || null,
-        profileToken: resolveProfileToken(player.profileId),
-      });
-      broadcastRoomState(room);
+      reconnectExistingPlayer(room, player, ws, "reconnect_token");
+      return;
+    }
+  }
+
+  const profileToken = sanitizeProfileToken(message?.profileToken);
+  const profileIdFromToken = profileToken ? String(profileIdByToken.get(profileToken) || "") : "";
+  if (profileIdFromToken) {
+    const existingProfilePlayer = room.players.find((item) => String(item.profileId || "") === profileIdFromToken);
+    if (existingProfilePlayer) {
+      reconnectExistingPlayer(room, existingProfilePlayer, ws, "profile_rejoin");
       return;
     }
   }
@@ -388,6 +370,55 @@ function onJoinRoom(ws, message) {
     reconnectToken: player.reconnectToken,
     profileId: profile.profileId,
     profileToken: profile.profileToken,
+  });
+  broadcastRoomState(room);
+}
+
+function reconnectExistingPlayer(room, player, ws, reason) {
+  const previousConnectionId = String(player?.connectionId || "");
+  if (previousConnectionId && previousConnectionId !== ws.meta.connectionId) {
+    const previousSocket = connectionsById.get(previousConnectionId);
+    if (previousSocket) {
+      previousSocket.meta.roomCode = null;
+      previousSocket.meta.playerId = null;
+      previousSocket.meta.profileId = null;
+      try {
+        previousSocket.close(4001, "Reconnected from another tab");
+      } catch (_error) {}
+    }
+  }
+  player.connected = true;
+  player.connectionId = ws.meta.connectionId;
+  player.lastSeenAt = Date.now();
+  player.canReconnectUntil = Date.now() + RECONNECT_WINDOW_MS;
+  if (!room.playerProfiles || typeof room.playerProfiles !== "object") {
+    room.playerProfiles = {};
+  }
+  if (player.profileId) {
+    room.playerProfiles[player.playerId] = player.profileId;
+  }
+  room.updatedAt = Date.now();
+  ws.meta.roomCode = room.code;
+  ws.meta.playerId = player.playerId;
+  ws.meta.profileId = player.profileId || null;
+  if (player.profileId) {
+    trackProfileRoomVisit(player.profileId, room.code, {
+      playerId: player.playerId,
+      playerName: player.name,
+      roomStatus: room.status,
+    });
+  }
+  appendActionLog(room.code, "reconnect_player", {
+    playerId: player.playerId,
+    profileId: player.profileId || null,
+    reason: String(reason || "unknown"),
+  });
+  send(ws, "room_joined", {
+    roomCode: room.code,
+    playerId: player.playerId,
+    reconnectToken: player.reconnectToken,
+    profileId: player.profileId || null,
+    profileToken: resolveProfileToken(player.profileId),
   });
   broadcastRoomState(room);
 }
@@ -1866,12 +1897,65 @@ function listActiveRoomsForProfile(profileIdInput) {
         playerId: me.playerId,
         playerName: me.name,
         connected: Boolean(me.connected),
+        endedTurn: Boolean(me.endedTurn),
         joinedAt: Number(room.createdAt || Date.now()),
         updatedAt: Number(room.updatedAt || Date.now()),
       };
     })
     .filter(Boolean)
     .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+}
+
+function resetActiveRoomsForProfile(profileTokenInput) {
+  const profileToken = sanitizeProfileToken(profileTokenInput);
+  if (!profileToken) {
+    return null;
+  }
+  const profileId = String(profileIdByToken.get(profileToken) || "");
+  if (!profileId || !profilesById.has(profileId)) {
+    return null;
+  }
+
+  const roomRefs = [];
+  Array.from(rooms.values()).forEach((room) => {
+    const players = Array.isArray(room.players) ? room.players : [];
+    players.forEach((player) => {
+      if (String(player?.profileId || "") !== profileId) {
+        return;
+      }
+      roomRefs.push({
+        roomCode: room.code,
+        playerId: String(player.playerId || ""),
+        isHost: String(player.playerId || "") === String(room.hostPlayerId || ""),
+      });
+    });
+  });
+
+  let terminatedRooms = 0;
+  let removedSeats = 0;
+  roomRefs.forEach((ref) => {
+    const room = rooms.get(ref.roomCode);
+    if (!room) {
+      return;
+    }
+    if (ref.isHost) {
+      terminateRoom(room, "profile_reset", ref.playerId);
+      terminatedRooms += 1;
+      return;
+    }
+    removePlayer(room, ref.playerId, "profile_reset", ref.playerId);
+    removedSeats += 1;
+  });
+
+  return {
+    ok: true,
+    profileId,
+    touchedRooms: roomRefs.length,
+    terminatedRooms,
+    removedSeats,
+    activeRooms: listActiveRoomsForProfile(profileId),
+    serverTime: Date.now(),
+  };
 }
 
 function parsePositiveInt(valueInput, fallback, minimum, maximum) {
@@ -1888,7 +1972,7 @@ function sendJson(res, statusCode, payload) {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "content-type",
   });
   res.end(JSON.stringify(payload || {}));

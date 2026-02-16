@@ -4,6 +4,7 @@
   class MultiplayerClient {
     constructor() {
       this.socket = null;
+      this.connectPromise = null;
       this.url = "";
       this.messageListeners = [];
       this.openListeners = [];
@@ -21,20 +22,54 @@
         return Promise.resolve();
       }
       if (this.socket && this.socket.readyState === 0) {
-        return Promise.resolve();
+        if (this.connectPromise) {
+          return this.connectPromise;
+        }
+        this.connectPromise = this.createConnectPromiseForSocket(this.socket);
+        return this.connectPromise;
       }
+      const socket = new globalScope.WebSocket(url);
+      this.socket = socket;
+      this.connectPromise = this.createConnectPromiseForSocket(socket);
+      return this.connectPromise;
+    }
+
+    createConnectPromiseForSocket(socket) {
       return new Promise((resolve, reject) => {
         let settled = false;
-        const socket = new globalScope.WebSocket(url);
-        this.socket = socket;
+        const settleResolve = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (this.connectPromise) {
+            this.connectPromise = null;
+          }
+          resolve();
+        };
+        const settleReject = (message) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (this.connectPromise) {
+            this.connectPromise = null;
+          }
+          reject(new Error(String(message || "Unable to connect to multiplayer server.")));
+        };
 
         socket.addEventListener("open", () => {
-          settled = true;
+          if (this.socket !== socket) {
+            return;
+          }
           this.openListeners.forEach((listener) => listener());
-          resolve();
+          settleResolve();
         });
 
         socket.addEventListener("message", (event) => {
+          if (this.socket !== socket) {
+            return;
+          }
           let data = null;
           try {
             data = JSON.parse(String(event.data || ""));
@@ -45,15 +80,22 @@
         });
 
         socket.addEventListener("close", (event) => {
+          const isActiveSocket = this.socket === socket;
+          if (!isActiveSocket) {
+            return;
+          }
+          this.socket = null;
+          this.connectPromise = null;
           this.closeListeners.forEach((listener) => listener(event));
+          settleReject("Unable to connect to multiplayer server.");
         });
 
         socket.addEventListener("error", (error) => {
-          this.errorListeners.forEach((listener) => listener(error));
-          if (!settled) {
-            settled = true;
-            reject(new Error("Unable to connect to multiplayer server."));
+          if (this.socket !== socket) {
+            return;
           }
+          this.errorListeners.forEach((listener) => listener(error));
+          settleReject("Unable to connect to multiplayer server.");
         });
       });
     }
@@ -62,8 +104,10 @@
       if (!this.socket) {
         return;
       }
-      this.socket.close();
+      const socket = this.socket;
       this.socket = null;
+      this.connectPromise = null;
+      socket.close();
     }
 
     send(type, payload) {

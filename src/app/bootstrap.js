@@ -1,11 +1,5 @@
 (function bootstrap(globalScope) {
   const root = globalScope.Unvention || (globalScope.Unvention = {});
-  if (typeof root.createSoloFlow !== "function" && typeof require === "function") {
-    try {
-      delete require.cache[require.resolve("./flows/soloFlow.js")];
-      require("./flows/soloFlow.js");
-    } catch (_error) {}
-  }
   if (typeof root.createHomeModeFlow !== "function" && typeof require === "function") {
     try {
       delete require.cache[require.resolve("./flows/homeModeFlow.js")];
@@ -37,6 +31,18 @@
   const MULTIPLAYER_STORAGE_KEY = "unvention.multiplayer.v1";
   const MULTIPLAYER_SESSION_KEY = "unvention.multiplayer.session.v1";
   const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
+  const ROOM_CITY_POOL = [
+    "London", "Paris", "Berlin", "Vienna", "Zurich", "Geneva", "Basel", "Milan", "Turin", "Bologna",
+    "Florence", "Rome", "Naples", "Barcelona", "Madrid", "Valencia", "Lisbon", "Porto", "Amsterdam", "Rotterdam",
+    "The Hague", "Utrecht", "Brussels", "Antwerp", "Leuven", "Ghent", "Copenhagen", "Stockholm", "Gothenburg", "Oslo",
+    "Helsinki", "Tallinn", "Riga", "Vilnius", "Warsaw", "Krakow", "Prague", "Brno", "Budapest", "Belgrade",
+    "Ljubljana", "Zagreb", "Athens", "Istanbul", "Ankara", "Bursa", "Sofia", "Bucharest", "Cluj", "Kyiv",
+    "Lviv", "Minsk", "Moscow", "Saint Petersburg", "Dublin", "Edinburgh", "Glasgow", "Manchester", "Birmingham", "Liverpool",
+    "Cambridge", "Oxford", "Bristol", "Bordeaux", "Lyon", "Grenoble", "Toulouse", "Marseille", "Munich", "Frankfurt",
+    "Hamburg", "Cologne", "Stuttgart", "Dresden", "Leipzig", "Nuremberg", "Hanover", "Eindhoven", "Maastricht", "Aarhus",
+    "Reykjavik", "Boston", "New York", "Philadelphia", "Chicago", "Pittsburgh", "Detroit", "San Francisco", "San Jose", "Seattle",
+    "Los Angeles", "Montreal", "Toronto", "Ottawa", "Vancouver", "Tokyo", "Osaka", "Kyoto", "Nagoya", "Seoul",
+  ];
   const VARIABLE_SETUP_STEP_IDS_BY_OPTION = {
     order: ["workshop_layout_order"],
     idea: ["random_invention_multiplier", "random_workshop_ideas"],
@@ -81,6 +87,7 @@
   let lastSyncedStateSignature = "";
   let reconnectTimer = null;
   let reconnectAttempts = 0;
+  let skipAutoReconnectOnNextClose = false;
   let inventionHover = null;
   let inventionVarietyHover = null;
   let lastAutoScrollTarget = "";
@@ -96,7 +103,12 @@
   let roomDirectoryLoading = false;
   let roomDirectoryLastFetchAt = 0;
   let roomDirectoryError = "";
-  let selectedGameMode = "solo";
+  let hubProfileSummary = null;
+  let hubProfileLoading = false;
+  let hubProfileLastFetchAt = 0;
+  let hubProfileError = "";
+  let hubSelectedRoomCode = "";
+  let gameSurfaceRoomCode = "";
   let selectedVariableSetup = getDefaultVariableSetupSelection();
   let sectionPlayerViews = SECTION_VIEW_KEYS.reduce((accumulator, key) => {
     accumulator[key] = "";
@@ -104,10 +116,9 @@
   }, {});
   let sectionViewTransitionPending = false;
   let homeStep = "mode";
+  let forceHomeSurface = true;
   loadHomeUiState();
-  if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
-    homeStep = "waitroom";
-  }
+  homeStep = "mode";
   const originalLogEvent = loggerService.logEvent.bind(loggerService);
   loggerService.logEvent = function logEventWithTurnCapture(level, message, context) {
     const entry = originalLogEvent(level, message, context);
@@ -167,15 +178,15 @@
     return Boolean(state && state.gameStarted);
   }
 
-  function isMultiplayerLobbyActive() {
-    return Boolean(multiplayerState.room && multiplayerState.room.code && multiplayerState.room.status === "lobby");
-  }
-
   function resolveHomeStep() {
-    if (isMultiplayerLobbyActive()) {
-      return "waitroom";
+    const normalized = String(homeStep || "mode");
+    if (normalized === "waitroom") {
+      return "room-list";
     }
-    return homeStep;
+    if (normalized === "multiplayer") {
+      return "mode";
+    }
+    return normalized;
   }
 
   function setHomeStep(nextStep) {
@@ -258,14 +269,6 @@
       if (!parsed || typeof parsed !== "object") {
         return;
       }
-      const mode = String(parsed.selectedGameMode || "").trim();
-      const step = String(parsed.homeStep || "").trim();
-      if (mode === "solo" || mode === "first" || mode === "international") {
-        selectedGameMode = mode;
-      }
-      if (step) {
-        homeStep = step;
-      }
       setVariableSetupSelection(parsed.variableSetup);
     } catch (_error) {}
   }
@@ -277,11 +280,36 @@
     }
     try {
       localStorageRef.setItem(HOME_UI_STORAGE_KEY, JSON.stringify({
-        selectedGameMode,
         variableSetup: selectedVariableSetup,
         homeStep,
       }));
     } catch (_error) {}
+  }
+
+  function getRoomCityName(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return "Workshop";
+    }
+    const poolSize = ROOM_CITY_POOL.length;
+    if (poolSize <= 0) {
+      return "Workshop";
+    }
+    let hash = 2166136261;
+    for (let index = 0; index < roomCode.length; index += 1) {
+      hash ^= roomCode.charCodeAt(index);
+      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+    const normalizedHash = (hash >>> 0);
+    return String(ROOM_CITY_POOL[normalizedHash % poolSize] || "Workshop");
+  }
+
+  function formatRoomDisplayName(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return "Workshop";
+    }
+    return getRoomCityName(roomCode) + " " + roomCode;
   }
 
   function loadMultiplayerState() {
@@ -312,10 +340,24 @@
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === "object") {
+            const roomSessionsByCode = normalizeRoomSessionMap(parsed.roomSessionsByCode);
+            const legacyRoomCode = normalizeRoomCode(parsed.roomCode || "");
+            const legacyPlayerId = String(parsed.playerId || "");
+            const legacyReconnectToken = String(parsed.reconnectToken || "");
+            if (legacyRoomCode && legacyReconnectToken) {
+              roomSessionsByCode[legacyRoomCode] = {
+                roomCode: legacyRoomCode,
+                playerId: legacyPlayerId,
+                reconnectToken: legacyReconnectToken,
+                updatedAt: Date.now(),
+                lastKnownStatus: String(parsed.lastKnownStatus || "unknown"),
+              };
+            }
             sessionPart = {
-              roomCode: String(parsed.roomCode || ""),
-              playerId: String(parsed.playerId || ""),
-              reconnectToken: String(parsed.reconnectToken || ""),
+              roomCode: legacyRoomCode,
+              playerId: legacyPlayerId,
+              reconnectToken: legacyReconnectToken,
+              roomSessionsByCode,
             };
           }
         }
@@ -341,6 +383,7 @@
       profileId: "",
       profileToken: "",
       reconnectToken: "",
+      roomSessionsByCode: {},
       connected: false,
       connecting: false,
       room: null,
@@ -429,14 +472,102 @@
         roomCode: multiplayerState.roomCode,
         playerId: multiplayerState.playerId,
         reconnectToken: multiplayerState.reconnectToken,
+        roomSessionsByCode: normalizeRoomSessionMap(multiplayerState.roomSessionsByCode),
       };
       sessionStorageRef.setItem(MULTIPLAYER_SESSION_KEY, JSON.stringify(sessionPayload));
     }
   }
 
+  function normalizeRoomSessionMap(input) {
+    const source = input && typeof input === "object" ? input : {};
+    const normalized = {};
+    Object.keys(source).forEach((key) => {
+      const entry = source[key];
+      if (!entry || typeof entry !== "object") {
+        return;
+      }
+      const roomCode = normalizeRoomCode(entry.roomCode || key);
+      const reconnectToken = String(entry.reconnectToken || "").trim();
+      if (!roomCode || !reconnectToken) {
+        return;
+      }
+      normalized[roomCode] = {
+        roomCode,
+        playerId: String(entry.playerId || ""),
+        reconnectToken,
+        updatedAt: Number(entry.updatedAt || Date.now()),
+        lastKnownStatus: String(entry.lastKnownStatus || "unknown"),
+      };
+    });
+    return normalized;
+  }
+
+  function upsertRoomSession(roomCodeInput, patchInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return null;
+    }
+    const patch = patchInput && typeof patchInput === "object" ? patchInput : {};
+    const sessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+    const previous = sessions[roomCode] || {
+      roomCode,
+      playerId: "",
+      reconnectToken: "",
+      updatedAt: 0,
+      lastKnownStatus: "unknown",
+    };
+    const next = {
+      ...previous,
+      ...patch,
+      roomCode,
+      playerId: String(patch.playerId || previous.playerId || ""),
+      reconnectToken: String(patch.reconnectToken || previous.reconnectToken || ""),
+      updatedAt: Number(patch.updatedAt || Date.now()),
+      lastKnownStatus: String(patch.lastKnownStatus || previous.lastKnownStatus || "unknown"),
+    };
+    if (!next.reconnectToken) {
+      return null;
+    }
+    sessions[roomCode] = next;
+    multiplayerState.roomSessionsByCode = sessions;
+    persistMultiplayerState();
+    return next;
+  }
+
+  function removeRoomSession(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return;
+    }
+    const sessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+    if (!Object.prototype.hasOwnProperty.call(sessions, roomCode)) {
+      return;
+    }
+    delete sessions[roomCode];
+    multiplayerState.roomSessionsByCode = sessions;
+    persistMultiplayerState();
+  }
+
+  function getRoomSession(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return null;
+    }
+    const sessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+    return sessions[roomCode] || null;
+  }
+
+  function getReconnectTokenForRoom(roomCodeInput) {
+    const session = getRoomSession(roomCodeInput);
+    return String(session?.reconnectToken || "");
+  }
+
   function clearMultiplayerSessionIdentity(optionsInput) {
     const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
     const preserveHomeStep = Boolean(options.preserveHomeStep);
+    const preserveRoomSessions = options.preserveRoomSessions !== false;
+    const removeCurrentRoomSession = Boolean(options.removeCurrentRoomSession);
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
     multiplayerState.roomCode = "";
     multiplayerState.playerId = "";
     multiplayerState.reconnectToken = "";
@@ -453,19 +584,65 @@
       accumulator[key] = "";
       return accumulator;
     }, {});
+    gameSurfaceRoomCode = "";
     if (reconnectTimer) {
       globalScope.clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    const sessionStorageRef = typeof globalScope.sessionStorage !== "undefined" ? globalScope.sessionStorage : null;
-    if (sessionStorageRef) {
-      sessionStorageRef.removeItem(MULTIPLAYER_SESSION_KEY);
+    if (!preserveRoomSessions) {
+      multiplayerState.roomSessionsByCode = {};
+    } else if (removeCurrentRoomSession && currentRoomCode) {
+      const sessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+      if (Object.prototype.hasOwnProperty.call(sessions, currentRoomCode)) {
+        delete sessions[currentRoomCode];
+        multiplayerState.roomSessionsByCode = sessions;
+      }
     }
     reconnectAttempts = 0;
+    persistMultiplayerState();
     if (!preserveHomeStep) {
       homeStep = "mode";
       persistHomeUiState();
     }
+  }
+
+  function resetMultiplayerForHomeAction(optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    clearReconnectTimer();
+    reconnectAttempts = 0;
+    clearMultiplayerSessionIdentity(options);
+    multiplayerState.connecting = false;
+    multiplayerState.connected = false;
+    multiplayerState.connectionId = "";
+    multiplayerState.lastError = "";
+    multiplayerClient.disconnect();
+    persistMultiplayerState();
+    forceHomeSurface = true;
+    renderMultiplayerUi();
+  }
+
+  async function resetLocalMultiplayerMemory() {
+    const profileTokenToReset = String(multiplayerState.profileToken || "").trim();
+    await resetProfileRoomsOnServer(profileTokenToReset);
+    resetMultiplayerForHomeAction({ preserveHomeStep: true, preserveRoomSessions: false });
+    multiplayerState.name = "";
+    multiplayerState.profileId = "";
+    multiplayerState.profileToken = "";
+    roomDirectoryRows = [];
+    roomDirectoryLoading = false;
+    roomDirectoryLastFetchAt = 0;
+    roomDirectoryError = "";
+    hubProfileSummary = null;
+    hubProfileLoading = false;
+    hubProfileLastFetchAt = 0;
+    hubProfileError = "";
+    hubSelectedRoomCode = "";
+    gameSurfaceRoomCode = "";
+    persistMultiplayerState();
+    setHomeStep("mode");
+    renderMultiplayerUi();
+    await refreshRoomDirectory(true);
+    loggerService.logEvent("info", "Reset local multiplayer memory", { source: "ui" });
   }
 
   function isInteractionBlocked() {
@@ -473,7 +650,7 @@
   }
 
   function teardownMultiplayerSession(resetReason) {
-    clearMultiplayerSessionIdentity();
+    clearMultiplayerSessionIdentity({ removeCurrentRoomSession: true });
     multiplayerState.connecting = false;
     multiplayerState.connected = false;
     multiplayerState.connectionId = "";
@@ -528,14 +705,10 @@
       return "Connecting...";
     }
     if (multiplayerState.connected) {
-      const connectionId = multiplayerState.connectionId ? " (" + multiplayerState.connectionId + ")" : "";
-      if (multiplayerState.lastError) {
-        return "Connected" + connectionId + " - " + multiplayerState.lastError;
-      }
-      return "Connected" + connectionId;
+      return "Connected";
     }
     if (multiplayerState.lastError) {
-      return "Offline - " + multiplayerState.lastError;
+      return "Offline";
     }
     return "Offline";
   }
@@ -551,7 +724,10 @@
     return "http:";
   }
 
-  function buildRoomDirectoryCandidates(inputUrl) {
+  function buildApiCandidates(inputUrl, pathInput) {
+    const path = String(pathInput || "/").startsWith("/")
+      ? String(pathInput || "/")
+      : "/" + String(pathInput || "");
     const candidates = [];
     const seen = new Set();
     const pushUnique = (urlInput) => {
@@ -572,10 +748,10 @@
         const localNodeHttpBase = inferLocalNodeMultiplayerUrl()
           .replace(/^wss:/, "https:")
           .replace(/^ws:/, "http:");
-        pushUnique(localNodeHttpBase + "/api/rooms");
+        pushUnique(localNodeHttpBase + path);
       }
       if (origin && !localDevWithSeparateApiPort) {
-        pushUnique(origin + "/api/rooms");
+        pushUnique(origin + path);
       }
     }
 
@@ -593,13 +769,42 @@
         if (basePath.endsWith("/ws")) {
           basePath = basePath.slice(0, -3);
         }
-        pushUnique(origin + basePath + "/api/rooms");
+        pushUnique(origin + basePath + path);
       }
-      pushUnique(origin + "/api/rooms");
+      pushUnique(origin + path);
     } catch (_error) {}
 
-    pushUnique("http://localhost:8080/api/rooms");
+    pushUnique("http://localhost:8080" + path);
     return candidates;
+  }
+
+  function buildRoomDirectoryCandidates(inputUrl) {
+    return buildApiCandidates(inputUrl, "/api/rooms");
+  }
+
+  async function fetchFirstJsonFromCandidates(urls) {
+    const candidates = Array.isArray(urls) ? urls : [];
+    let lastErrorMessage = "Could not load data";
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          lastErrorMessage = "Request failed (" + String(response.status) + ")";
+          continue;
+        }
+        const payload = await response.json();
+        return {
+          ok: true,
+          payload,
+        };
+      } catch (error) {
+        lastErrorMessage = String(error?.message || "Could not load data");
+      }
+    }
+    return {
+      ok: false,
+      error: lastErrorMessage,
+    };
   }
 
   function renderRoomDirectory() {
@@ -618,18 +823,32 @@
       body.innerHTML = "<tr><td colspan='4'>" + String(roomDirectoryError) + "</td></tr>";
       return;
     }
-    if (!Array.isArray(roomDirectoryRows) || roomDirectoryRows.length === 0) {
+    const openRooms = Array.isArray(roomDirectoryRows)
+      ? roomDirectoryRows.filter((room) => {
+        const status = String(room?.status || "").toLowerCase();
+        return status === "lobby" && Boolean(room?.joinable);
+      })
+      : [];
+    if (openRooms.length === 0) {
       body.innerHTML = "<tr><td colspan='4'>No open rooms</td></tr>";
       return;
     }
-    body.innerHTML = roomDirectoryRows.map((room) => {
-      const joinDisabled = room.joinable ? "" : " disabled";
-      const actionLabel = room.joinable ? "Join" : "Locked";
+    body.innerHTML = openRooms.map((room) => {
+      const roomCode = normalizeRoomCode(room.code);
+      const roomDisplayName = escapeHtml(formatRoomDisplayName(roomCode));
+      const pill = resolveSidebarStatusPill({
+        roomCode,
+        status: room.status,
+      });
       return "<tr>" +
-        "<td><code>" + String(room.code || "-") + "</code></td>" +
+        "<td><strong>" + roomDisplayName + "</strong></td>" +
         "<td>" + String(room.playerCount || 0) + "/" + String(room.maxPlayers || 5) + "</td>" +
-        "<td>" + String(room.status || "lobby") + "</td>" +
-        "<td><button type='button' data-action='join-listed-room' data-room-code='" + String(room.code || "") + "'" + joinDisabled + ">" + actionLabel + "</button></td>" +
+        "<td><span class='mp-room-status-pill mp-room-status-pill--" +
+        escapeHtml(pill.key) +
+        "'>" +
+        escapeHtml(pill.label) +
+        "</span></td>" +
+        "<td><button type='button' data-action='join-listed-room' data-room-code='" + String(room.code || "") + "'>Join</button></td>" +
         "</tr>";
     }).join("");
   }
@@ -651,30 +870,21 @@
     roomDirectoryLoading = true;
     roomDirectoryError = "";
     renderRoomDirectory();
-    const candidates = buildRoomDirectoryCandidates(multiplayerState.url)
-      .map((baseUrl) => baseUrl + "?t=" + String(now));
-    let loaded = false;
-    let lastErrorMessage = "Could not load rooms";
+    const candidates = buildRoomDirectoryCandidates(multiplayerState.url).map((baseUrl) => {
+      return baseUrl + "?t=" + String(now);
+    });
     try {
-      for (const url of candidates) {
-        try {
-          const response = await fetch(url, { cache: "no-store" });
-          if (!response.ok) {
-            lastErrorMessage = "Failed to load room list (" + String(response.status) + ")";
-            continue;
-          }
-          const payload = await response.json();
-          roomDirectoryRows = Array.isArray(payload?.roomList) ? payload.roomList : [];
-          roomDirectoryLastFetchAt = Date.now();
-          roomDirectoryError = "";
-          loaded = true;
-          break;
-        } catch (error) {
-          lastErrorMessage = String(error?.message || "Could not load rooms");
-        }
-      }
-      if (!loaded) {
-        roomDirectoryError = lastErrorMessage;
+      const result = await fetchFirstJsonFromCandidates(candidates);
+      if (!result.ok) {
+        roomDirectoryError = String(result.error || "Could not load rooms");
+      } else {
+        const payload = result.payload || {};
+        roomDirectoryRows = (Array.isArray(payload.roomList) ? payload.roomList : []).filter((room) => {
+          const status = String(room?.status || "").toLowerCase();
+          return status === "lobby" && Boolean(room?.joinable);
+        });
+        roomDirectoryLastFetchAt = Date.now();
+        roomDirectoryError = "";
       }
     } catch (error) {
       roomDirectoryError = String(error?.message || "Could not load rooms");
@@ -684,24 +894,901 @@
     }
   }
 
+  async function resetProfileRoomsOnServer(profileTokenInput) {
+    const profileToken = String(profileTokenInput || "").trim();
+    if (!profileToken || typeof fetch !== "function") {
+      return false;
+    }
+    const now = Date.now();
+    const encodedToken = encodeURIComponent(profileToken);
+    const candidates = buildApiCandidates(
+      multiplayerState.url,
+      "/api/profile/reset?profileToken=" + encodedToken + "&t=" + String(now),
+    );
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          continue;
+        }
+        return true;
+      } catch (_error) {}
+    }
+    return false;
+  }
+
+  function normalizeRoomCode(roomCodeInput) {
+    return String(roomCodeInput || "").trim().toUpperCase();
+  }
+
+  function isActiveRoomStatus(statusInput) {
+    const status = String(statusInput || "").trim().toLowerCase();
+    return status === "lobby" || status === "in_game";
+  }
+
+  function isFinishedRoomStatus(statusInput) {
+    const status = String(statusInput || "").trim().toLowerCase();
+    return status === "completed" || status === "abandoned" || status === "terminated" || status === "archived";
+  }
+
+  function toRoomStatusLabel(statusInput) {
+    const status = String(statusInput || "").trim().toLowerCase();
+    if (!status) {
+      return "Unknown";
+    }
+    const labels = {
+      lobby: "Lobby",
+      in_game: "In Progress",
+      completed: "Finished",
+      abandoned: "Abandoned",
+      terminated: "Terminated",
+      archived: "Archived",
+    };
+    return labels[status] || status.replace(/_/g, " ");
+  }
+
+  function formatHubTimestamp(timestampInput) {
+    const value = Number(timestampInput);
+    if (!Number.isFinite(value) || value <= 0) {
+      return "Unknown";
+    }
+    try {
+      return new Date(value).toLocaleString();
+    } catch (_error) {
+      return "Unknown";
+    }
+  }
+
+  function setSectionViewsToPlayer(playerIdInput) {
+    const playerId = String(playerIdInput || activePlayerId || multiplayerState.playerId || "P1").trim() || "P1";
+    SECTION_VIEW_KEYS.forEach((key) => {
+      sectionPlayerViews[key] = playerId;
+    });
+  }
+
+  function getPreferredSectionViewPlayerId() {
+    return String(activePlayerId || multiplayerState.playerId || "P1").trim() || "P1";
+  }
+
+  function resolveSidebarStatusPill(roomInput) {
+    const room = roomInput && typeof roomInput === "object" ? roomInput : {};
+    const status = String(room.status || "").toLowerCase();
+    if (status === "lobby") {
+      return { key: "pending-start", label: "Pending start" };
+    }
+    if (isFinishedRoomStatus(status)) {
+      return { key: "finished", label: "Finished" };
+    }
+    if (status === "in_game") {
+      if (typeof room.myEndedTurn === "boolean") {
+        return room.myEndedTurn
+          ? { key: "waiting-others", label: "Waiting for others" }
+          : { key: "waiting-you", label: "Waiting for you" };
+      }
+      const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+      const isCurrentRoom = normalizeRoomCode(room.roomCode) === currentRoomCode;
+      if (isCurrentRoom && Array.isArray(multiplayerState.room?.players)) {
+        const me = multiplayerState.room.players.find((player) => {
+          return String(player?.playerId || "") === String(multiplayerState.playerId || "");
+        });
+        if (me && me.endedTurn) {
+          return { key: "waiting-others", label: "Waiting for others" };
+        }
+        return { key: "waiting-you", label: "Waiting for you" };
+      }
+      return { key: "waiting-others", label: "Waiting for others" };
+    }
+    return { key: "pending-start", label: "Pending start" };
+  }
+
+  function createHubRoomList() {
+    const roomsByCode = new Map();
+    const upsertRoom = (roomCodeInput, patchInput) => {
+      const roomCode = normalizeRoomCode(roomCodeInput);
+      if (!roomCode) {
+        return;
+      }
+      const patch = patchInput && typeof patchInput === "object" ? patchInput : {};
+      const previous = roomsByCode.get(roomCode) || {
+        roomCode,
+        status: "unknown",
+        playerCount: null,
+        maxPlayers: null,
+        hostPlayerId: "",
+        hostName: "",
+        joinable: false,
+        listed: false,
+        inProfileRecent: false,
+        inProfileActive: false,
+        currentJoined: false,
+        hasReconnectSession: false,
+        connected: null,
+        myEndedTurn: null,
+        myPlayerId: "",
+        myPlayerName: "",
+        removedByAction: "",
+        activityAt: 0,
+        createdAt: 0,
+      };
+      const nextActivityAt = Math.max(
+        Number(previous.activityAt || 0),
+        Number(patch.activityAt || 0),
+        Number(patch.updatedAt || 0),
+        Number(patch.lastSeenAt || 0),
+      );
+      const nextCreatedAt = Math.max(Number(previous.createdAt || 0), Number(patch.createdAt || 0));
+      const readBooleanPatch = (key) => {
+        if (Object.prototype.hasOwnProperty.call(patch, key)) {
+          return Boolean(patch[key]);
+        }
+        return Boolean(previous[key]);
+      };
+      roomsByCode.set(roomCode, {
+        ...previous,
+        ...patch,
+        roomCode,
+        status: String(patch.status || previous.status || "unknown"),
+        joinable: readBooleanPatch("joinable"),
+        hasReconnectSession: readBooleanPatch("hasReconnectSession"),
+        listed: readBooleanPatch("listed"),
+        inProfileRecent: readBooleanPatch("inProfileRecent"),
+        inProfileActive: readBooleanPatch("inProfileActive"),
+        currentJoined: readBooleanPatch("currentJoined"),
+        activityAt: nextActivityAt,
+        createdAt: nextCreatedAt,
+      });
+    };
+
+    const knownSessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+    Object.keys(knownSessions).forEach((roomCode) => {
+      const session = knownSessions[roomCode];
+      upsertRoom(roomCode, {
+        status: String(session?.lastKnownStatus || "unknown"),
+        inProfileRecent: true,
+        hasReconnectSession: true,
+        myPlayerId: String(session?.playerId || ""),
+        myPlayerName: toPlayerSeatLabel(session?.playerId || ""),
+        activityAt: Number(session?.updatedAt || 0),
+        createdAt: Number(session?.updatedAt || 0),
+      });
+    });
+
+    const activeRooms = Array.isArray(hubProfileSummary?.activeRooms) ? hubProfileSummary.activeRooms : [];
+    activeRooms.forEach((room) => {
+      const playerId = String(room?.playerId || "");
+      upsertRoom(room?.roomCode, {
+        status: String(room?.roomStatus || "in_game"),
+        inProfileActive: true,
+        connected: Object.prototype.hasOwnProperty.call(room || {}, "connected")
+          ? Boolean(room.connected)
+          : null,
+        myEndedTurn: typeof room?.endedTurn === "boolean" ? Boolean(room.endedTurn) : null,
+        myPlayerId: playerId,
+        myPlayerName: toPlayerSeatLabel(playerId),
+        activityAt: Number(room?.updatedAt || room?.joinedAt || 0),
+      });
+    });
+
+    const directoryRooms = Array.isArray(roomDirectoryRows) ? roomDirectoryRows : [];
+    directoryRooms.forEach((room) => {
+      const hostPlayerId = String(room?.hostPlayerId || "");
+      upsertRoom(room?.code, {
+        status: String(room?.status || "unknown"),
+        playerCount: Number.isFinite(Number(room?.playerCount)) ? Number(room.playerCount) : null,
+        maxPlayers: Number.isFinite(Number(room?.maxPlayers)) ? Number(room.maxPlayers) : null,
+        hostPlayerId,
+        hostName: hostPlayerId ? toPlayerSeatLabel(hostPlayerId) : "",
+        joinable: Boolean(room?.joinable),
+        listed: true,
+        activityAt: Number(room?.updatedAt || 0),
+        createdAt: Number(room?.createdAt || 0),
+      });
+    });
+
+    const recentRooms = Array.isArray(hubProfileSummary?.recentRooms) ? hubProfileSummary.recentRooms : [];
+    recentRooms.forEach((room) => {
+      const playerId = String(room?.playerId || "");
+      upsertRoom(room?.roomCode, {
+        status: String(room?.roomStatus || "unknown"),
+        inProfileRecent: true,
+        connected: Object.prototype.hasOwnProperty.call(room || {}, "connected")
+          ? Boolean(room.connected)
+          : null,
+        myPlayerId: playerId,
+        myPlayerName: toPlayerSeatLabel(playerId),
+        removedByAction: String(room?.removedByAction || ""),
+        activityAt: Number(room?.lastSeenAt || room?.joinedAt || 0),
+        createdAt: Number(room?.joinedAt || 0),
+      });
+    });
+
+    if (multiplayerState.room && multiplayerState.room.code) {
+      const room = multiplayerState.room;
+      const players = Array.isArray(room.players) ? room.players : [];
+      upsertRoom(room.code, {
+        status: String(room.status || "unknown"),
+        playerCount: players.length,
+        maxPlayers: Number.isFinite(Number(room.maxPlayers)) ? Number(room.maxPlayers) : null,
+        hostPlayerId: String(room.hostPlayerId || ""),
+        hostName: toPlayerSeatLabel(room.hostPlayerId),
+        currentJoined: true,
+        joinable: String(room.status || "").toLowerCase() === "lobby",
+        hasReconnectSession: Boolean(multiplayerState.reconnectToken),
+        connected: true,
+        myEndedTurn: (() => {
+          const me = players.find((player) => String(player?.playerId || "") === String(multiplayerState.playerId || ""));
+          return me ? Boolean(me.endedTurn) : null;
+        })(),
+        myPlayerId: String(multiplayerState.playerId || ""),
+        myPlayerName: toPlayerSeatLabel(multiplayerState.playerId),
+        activityAt: Number(room.updatedAt || Date.now()),
+        createdAt: Number(room.createdAt || 0),
+      });
+    }
+
+    const list = Array.from(roomsByCode.values()).map((room) => {
+      const status = String(room.status || "unknown").toLowerCase();
+      const profileKnown = Boolean(room.inProfileActive || room.inProfileRecent || room.currentJoined);
+      const sortGroup = room.currentJoined
+        ? 0
+        : isActiveRoomStatus(status)
+          ? 1
+          : isFinishedRoomStatus(status)
+            ? 2
+            : 3;
+      return {
+        ...room,
+        status,
+        profileKnown,
+        sortGroup,
+      };
+    });
+    list.sort((a, b) => {
+      if (a.sortGroup !== b.sortGroup) {
+        return a.sortGroup - b.sortGroup;
+      }
+      return Number(b.activityAt || 0) - Number(a.activityAt || 0);
+    });
+    return list;
+  }
+
+  function ensureHubSelection(hubRooms) {
+    const rooms = Array.isArray(hubRooms) ? hubRooms : [];
+    if (rooms.length === 0) {
+      const changed = Boolean(hubSelectedRoomCode);
+      hubSelectedRoomCode = "";
+      return { selectedCode: "", changed };
+    }
+    const existing = rooms.find((room) => room.roomCode === hubSelectedRoomCode);
+    if (existing) {
+      return { selectedCode: existing.roomCode, changed: false };
+    }
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const preferred = rooms.find((room) => room.roomCode === currentRoomCode) || rooms[0];
+    const nextCode = String(preferred?.roomCode || "");
+    const changed = nextCode !== hubSelectedRoomCode;
+    hubSelectedRoomCode = nextCode;
+    return { selectedCode: nextCode, changed };
+  }
+
+  async function refreshHubProfileSummary(force) {
+    if (!multiplayerState.profileToken) {
+      hubProfileSummary = null;
+      hubProfileError = "";
+      renderMultiplayerUi();
+      return;
+    }
+    if (typeof fetch !== "function") {
+      hubProfileError = "Profile history unavailable";
+      renderMultiplayerUi();
+      return;
+    }
+    const now = Date.now();
+    if (hubProfileLoading) {
+      return;
+    }
+    if (!force && now - hubProfileLastFetchAt < 4000) {
+      return;
+    }
+    hubProfileLoading = true;
+    hubProfileError = "";
+    renderMultiplayerUi();
+    const encodedToken = encodeURIComponent(String(multiplayerState.profileToken || ""));
+    const candidates = buildApiCandidates(
+      multiplayerState.url,
+      "/api/profile?profileToken=" + encodedToken + "&t=" + String(now),
+    );
+    try {
+      const result = await fetchFirstJsonFromCandidates(candidates);
+      if (!result.ok) {
+        hubProfileError = String(result.error || "Could not load profile");
+      } else {
+        const payload = result.payload || {};
+        hubProfileSummary = {
+          profile: payload.profile || null,
+          activeRooms: Array.isArray(payload.activeRooms) ? payload.activeRooms : [],
+          recentRooms: Array.isArray(payload.recentRooms) ? payload.recentRooms : [],
+          serverTime: Number(payload.serverTime || now),
+        };
+        hubProfileLastFetchAt = Date.now();
+        hubProfileError = "";
+      }
+    } catch (error) {
+      hubProfileError = String(error?.message || "Could not load profile");
+    } finally {
+      hubProfileLoading = false;
+      renderMultiplayerUi();
+    }
+  }
+
+
+  async function refreshPlayerHub(force) {
+    await Promise.all([
+      refreshRoomDirectory(force),
+      refreshHubProfileSummary(force),
+    ]);
+    const rooms = createHubRoomList();
+    ensureHubSelection(rooms);
+    renderMultiplayerUi();
+  }
+
+  function renderHubUi() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const profileLine = document.getElementById("hub-profile-line");
+    const roomListNode = document.getElementById("mp-hub-room-list");
+    const homeNavNode = document.getElementById("home-sidebar-home");
+    const roomTitleNode = document.getElementById("mp-hub-room-title");
+    const roomMetaNode = document.getElementById("mp-hub-room-meta");
+    const roomOpenButton = document.getElementById("home-room-open");
+    const roomAbandonButton = document.getElementById("home-room-abandon");
+    const roomActionHintNode = document.getElementById("home-room-action-hint");
+    const roomSummaryNode = document.getElementById("mp-hub-room-summary");
+    const roomPlayersBodyNode = document.getElementById("mp-hub-room-player-table-body");
+    const effectiveStep = resolveHomeStep();
+    if (
+      !profileLine ||
+      !roomListNode ||
+      !homeNavNode ||
+      !roomTitleNode ||
+      !roomMetaNode ||
+      !roomOpenButton ||
+      !roomAbandonButton ||
+      !roomActionHintNode ||
+      !roomSummaryNode ||
+      !roomPlayersBodyNode
+    ) {
+      return;
+    }
+
+    if (homeNavNode.classList && typeof homeNavNode.classList.toggle === "function") {
+      homeNavNode.classList.toggle("home-sidebar__nav-item--active", effectiveStep === "mode");
+    }
+
+    if (!multiplayerState.profileToken) {
+      profileLine.textContent = "Rooms you started or joined appear here.";
+    } else if (hubProfileLoading && !hubProfileSummary) {
+      profileLine.textContent = "Loading profile summary...";
+    } else if (hubProfileError && !hubProfileSummary) {
+      profileLine.textContent = hubProfileError;
+    } else if (hubProfileSummary?.profile) {
+      const activeCount = Array.isArray(hubProfileSummary.activeRooms) ? hubProfileSummary.activeRooms.length : 0;
+      const recentCount = Array.isArray(hubProfileSummary.recentRooms) ? hubProfileSummary.recentRooms.length : 0;
+      profileLine.textContent =
+        "Profile " +
+        String(hubProfileSummary.profile.displayName || "Player") +
+        " | Active " +
+        String(activeCount) +
+        " | Recent " +
+        String(recentCount);
+    } else {
+      profileLine.textContent = "Rooms you started or joined appear here.";
+    }
+
+    const rooms = createHubRoomList();
+    const selection = ensureHubSelection(rooms);
+    const selectedCode = selection.selectedCode;
+    const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
+
+    const renderRoomButtons = (collection) => {
+      if (!Array.isArray(collection) || collection.length === 0) {
+        return "<div class='mp-hub-room-list__empty'>None</div>";
+      }
+      return collection.map((room) => {
+        const isSelected = room.roomCode === selectedCode;
+        const code = escapeHtml(room.roomCode);
+        const roomDisplayName = escapeHtml(formatRoomDisplayName(room.roomCode));
+        const status = escapeHtml(toRoomStatusLabel(room.status));
+        const pill = resolveSidebarStatusPill(room);
+        const players = room.playerCount === null || room.maxPlayers === null
+          ? "-"
+          : String(room.playerCount) + "/" + String(room.maxPlayers);
+        const updatedAt = Number(room.activityAt || 0) > 0
+          ? "Updated " + escapeHtml(formatHubTimestamp(room.activityAt))
+          : "Updated recently";
+        return "<a class='mp-hub-room-item' role='button' tabindex='0'" +
+          (isSelected ? " mp-hub-room-item--selected" : "") +
+          "' data-action='hub-select-room' data-room-code='" + code + "'>" +
+          "<span class='mp-hub-room-item__title'>" + roomDisplayName + "</span>" +
+          "<span class='mp-hub-room-item__line'>" +
+          "<span class='mp-hub-room-item__meta'>" + status + " | " + escapeHtml(players) + "</span>" +
+          "<span class='mp-room-status-pill mp-room-status-pill--" + escapeHtml(pill.key) + "'>" + escapeHtml(pill.label) + "</span>" +
+          "</span>" +
+          "<span class='mp-hub-room-item__meta'>" + updatedAt + "</span>" +
+          "</a>";
+      }).join("");
+    };
+
+    roomListNode.innerHTML = renderRoomButtons(
+      rooms.filter((room) => {
+        return room.currentJoined || room.inProfileActive || room.inProfileRecent;
+      }),
+    );
+
+    if (!selectedRoom) {
+      roomTitleNode.textContent = "Select a room";
+      roomMetaNode.textContent = "Pick a room from the sidebar to review details.";
+      roomOpenButton.disabled = true;
+      roomOpenButton.textContent = "Primary Action";
+      roomAbandonButton.disabled = true;
+      roomAbandonButton.textContent = "Abandon Game";
+      roomActionHintNode.textContent = "Select a room to open or abandon.";
+      roomSummaryNode.innerHTML = "<p class='mp-status-line'>No room selected.</p>";
+      roomPlayersBodyNode.innerHTML = "<tr><td colspan='6'>No player data available.</td></tr>";
+      return;
+    }
+
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const isCurrentRoom = selectedRoom.roomCode === currentRoomCode;
+    const actions = resolveHubRoomActions(selectedRoom);
+    const statusLabel = toRoomStatusLabel(selectedRoom.status);
+    const summaryPlayerCount = selectedRoom.playerCount;
+    const summaryMaxPlayers = selectedRoom.maxPlayers;
+    const summaryHostPlayerId = String(selectedRoom.hostPlayerId || "");
+
+    roomTitleNode.textContent = "Room " + formatRoomDisplayName(selectedRoom.roomCode);
+    roomMetaNode.textContent =
+      statusLabel +
+      (isCurrentRoom ? " | Currently joined" : "") +
+      " | Manage room";
+    roomOpenButton.disabled = !actions.canOpen;
+    roomOpenButton.textContent = actions.openLabel;
+    roomAbandonButton.disabled = !actions.canAbandon;
+    roomAbandonButton.textContent = actions.abandonLabel;
+    roomActionHintNode.textContent = actions.hint;
+    const currentRoomTurn = multiplayerState.room?.turn || null;
+    const waitingOn = Array.isArray(multiplayerState.room?.players)
+      ? multiplayerState.room.players
+          .filter((player) => !player.endedTurn)
+          .map((player) => toPlayerSeatLabel(player.playerId))
+      : [];
+    roomSummaryNode.innerHTML =
+      "<div class='mp-hub-room-summary__row'><strong>Status</strong><span>" + escapeHtml(statusLabel) + "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Players</strong><span>" +
+      escapeHtml(
+        summaryPlayerCount === null || summaryMaxPlayers === null
+          ? "Unknown"
+          : String(summaryPlayerCount) + "/" + String(summaryMaxPlayers),
+      ) +
+      "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Host</strong><span>" +
+      escapeHtml(toPlayerSeatLabel(summaryHostPlayerId) || "Unknown") +
+      "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Your seat</strong><span>" +
+      escapeHtml(selectedRoom.myPlayerId ? toPlayerSeatLabel(selectedRoom.myPlayerId) : "-") +
+      "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Turn</strong><span>" +
+      escapeHtml(
+        isCurrentRoom && String(multiplayerState.room?.status || "") === "in_game"
+          ? String(currentRoomTurn?.day || "Friday") + " #" + String(currentRoomTurn?.number || 1)
+          : "-",
+      ) +
+      "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Waiting On</strong><span>" +
+      escapeHtml(
+        isCurrentRoom && String(multiplayerState.room?.status || "") === "in_game"
+          ? (waitingOn.length > 0 ? waitingOn.join(", ") : "No one")
+          : "-",
+      ) +
+      "</span></div>" +
+      "<div class='mp-hub-room-summary__row'><strong>Last seen</strong><span>" +
+      escapeHtml(formatHubTimestamp(selectedRoom.activityAt || selectedRoom.createdAt)) +
+      "</span></div>" +
+      (selectedRoom.removedByAction
+        ? "<div class='mp-hub-room-summary__row'><strong>Last action</strong><span>" +
+          escapeHtml(selectedRoom.removedByAction) +
+          "</span></div>"
+        : "");
+
+    if (isCurrentRoom && Array.isArray(multiplayerState.room?.players)) {
+      const roomPlayers = multiplayerState.room.players;
+      const canKick = isLocalPlayerHost() &&
+        (String(multiplayerState.room?.status || "") === "lobby" || String(multiplayerState.room?.status || "") === "in_game");
+      roomPlayersBodyNode.innerHTML = roomPlayers.map((player) => {
+        const isMe = String(player?.playerId || "") === String(multiplayerState.playerId || "");
+        const presence = player.connected ? "online" : "offline";
+        const turnState = player.endedTurn ? "ended turn" : "playing";
+        const liveSnapshot = getLiveStateSnapshotForRoomPlayer(player);
+        const liveScore = Number(liveSnapshot?.player?.totalScore);
+        const summaryScore = Number(player?.turnSummary?.totalScore);
+        const resolvedScore = Number.isFinite(liveScore)
+          ? liveScore
+          : (Number.isFinite(summaryScore) ? summaryScore : null);
+        const waiting = String(multiplayerState.room?.status || "") === "in_game"
+          ? (player.endedTurn ? "No" : "Yes")
+          : "-";
+        const label = toPlayerSeatLabel(player.playerId) +
+          (isMe ? " (you)" : "") +
+          (String(player.playerId || "") === String(multiplayerState.room?.hostPlayerId || "") ? " [host]" : "");
+        const kickButton = canKick && !isMe
+          ? "<button type='button' class='button-destructive' data-action='hub-kick-player' data-player-id='" + String(player.playerId || "") + "'>Kick</button>"
+          : "";
+        return "<tr>" +
+          "<td>" + escapeHtml(label) + "</td>" +
+          "<td>" + escapeHtml(presence) + "</td>" +
+          "<td>" + escapeHtml(turnState) + "</td>" +
+          "<td>" + (resolvedScore === null ? "-" : String(resolvedScore)) + "</td>" +
+          "<td>" + escapeHtml(waiting) + "</td>" +
+          "<td>" + kickButton + "</td>" +
+          "</tr>";
+      }).join("");
+    } else {
+      roomPlayersBodyNode.innerHTML = "<tr><td colspan='6'>Enter this room to view players.</td></tr>";
+    }
+  }
+
+  function resolveHubRoomActions(selectedRoomInput) {
+    const selectedRoom = selectedRoomInput && typeof selectedRoomInput === "object"
+      ? selectedRoomInput
+      : null;
+    if (!selectedRoom) {
+      return {
+        canOpen: false,
+        openLabel: "Primary Action",
+        openIntent: "none",
+        canAbandon: false,
+        abandonLabel: "Abandon Game",
+        hint: "Select a room.",
+      };
+    }
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const reconnectToken = getReconnectTokenForRoom(selectedRoom.roomCode);
+    const hasReconnectSession = Boolean(reconnectToken || selectedRoom.hasReconnectSession);
+    const status = String(selectedRoom.status || "").toLowerCase();
+    const isCurrentRoom = hasActiveMultiplayerRoom() && selectedRoom.roomCode === currentRoomCode;
+    const hostPlayerId = String(
+      selectedRoom.hostPlayerId ||
+      (isCurrentRoom ? String(multiplayerState.room?.hostPlayerId || "") : ""),
+    );
+    const myPlayerId = String(
+      selectedRoom.myPlayerId ||
+      (isCurrentRoom ? String(multiplayerState.playerId || "") : ""),
+    );
+    const isHostMember = Boolean(hostPlayerId && myPlayerId && hostPlayerId === myPlayerId);
+    const canSwitchContext = Boolean(
+      isCurrentRoom ||
+      hasReconnectSession ||
+      selectedRoom.inProfileActive ||
+      (status === "lobby" && selectedRoom.joinable),
+    );
+    const canAbandon = Boolean((status === "lobby" || status === "in_game") && canSwitchContext);
+
+    if (status === "lobby") {
+      if (isHostMember) {
+        return {
+          canOpen: canSwitchContext,
+          openLabel: "Start Game",
+          openIntent: "start_game",
+          canAbandon,
+          abandonLabel: "Abandon Game",
+          hint: "Host abandon deletes the room for all players.",
+        };
+      }
+      return {
+        canOpen: false,
+        openLabel: "Start Game",
+        openIntent: "none",
+        canAbandon,
+        abandonLabel: "Abandon Game",
+        hint: canAbandon
+          ? "Only the host can start this game."
+          : "Join this room first to manage it.",
+      };
+    }
+
+    if (status === "in_game") {
+      return {
+        canOpen: canSwitchContext,
+        openLabel: "Go to Game",
+        openIntent: "go_to_game",
+        canAbandon,
+        abandonLabel: "Abandon Game",
+        hint: canSwitchContext
+          ? "Open game or abandon from this summary."
+          : "You can only open this in-progress room after joining it.",
+      };
+    }
+
+    return {
+      canOpen: false,
+      openLabel: "Primary Action",
+      openIntent: "none",
+      canAbandon: false,
+      abandonLabel: "Abandon Game",
+      hint: isFinishedRoomStatus(selectedRoom.status)
+        ? "Room is finished and not reopenable."
+        : "Room is not available right now.",
+    };
+  }
+
+  async function waitForRoomContext(roomCodeInput, timeoutMsInput) {
+    const targetRoomCode = normalizeRoomCode(roomCodeInput);
+    if (!targetRoomCode) {
+      return false;
+    }
+    const timeoutMs = Math.max(200, Number(timeoutMsInput || 2000));
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || "");
+      if (currentRoomCode === targetRoomCode) {
+        return true;
+      }
+      await new Promise((resolve) => {
+        globalScope.setTimeout(resolve, 30);
+      });
+    }
+    return normalizeRoomCode(multiplayerState.room?.code || "") === targetRoomCode;
+  }
+
+  async function ensureSelectedHubRoomContext(selectedRoomInput) {
+    const selectedRoom = selectedRoomInput && typeof selectedRoomInput === "object"
+      ? selectedRoomInput
+      : null;
+    if (!selectedRoom) {
+      return false;
+    }
+    const selectedCode = normalizeRoomCode(selectedRoom.roomCode);
+    if (!selectedCode) {
+      return false;
+    }
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    if (hasActiveMultiplayerRoom() && currentRoomCode === selectedCode) {
+      return true;
+    }
+    const opened = await openSelectedHubRoom();
+    if (opened === false) {
+      return false;
+    }
+    return waitForRoomContext(selectedCode, 3000);
+  }
+
+  async function runSelectedHubPrimaryAction() {
+    const rooms = createHubRoomList();
+    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
+    if (!selectedRoom) {
+      return;
+    }
+    const actions = resolveHubRoomActions(selectedRoom);
+    if (!actions.canOpen) {
+      multiplayerState.lastError = actions.hint;
+      renderMultiplayerUi();
+      return;
+    }
+    if (actions.openIntent !== "start_game") {
+      await openSelectedHubRoom();
+      return;
+    }
+    const entered = await ensureSelectedHubRoomContext(selectedRoom);
+    if (!entered) {
+      multiplayerState.lastError = "Could not enter this room to start the game.";
+      renderMultiplayerUi();
+      return;
+    }
+    if (!isLocalPlayerHost() || String(multiplayerState.room?.status || "") !== "lobby") {
+      multiplayerState.lastError = "Only the host can start this game.";
+      renderMultiplayerUi();
+      return;
+    }
+    gameSurfaceRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    forceHomeSurface = false;
+    setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
+    await sendMultiplayerCommand("start_game", {}, {
+      errorMessage: "Could not start game. Check connection.",
+    });
+  }
+
+  async function selectHubRoom(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return;
+    }
+    hubSelectedRoomCode = roomCode;
+    setHomeStep("room-list");
+    renderMultiplayerUi();
+  }
+
+  async function openSelectedHubRoom() {
+    const rooms = createHubRoomList();
+    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
+    if (!selectedRoom) {
+      return;
+    }
+    const actions = resolveHubRoomActions(selectedRoom);
+    if (!actions.canOpen) {
+      multiplayerState.lastError = actions.hint;
+      renderMultiplayerUi();
+      return;
+    }
+
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const selectedReconnectToken = getReconnectTokenForRoom(selectedRoom.roomCode);
+    if (hasActiveMultiplayerRoom() && selectedRoom.roomCode === currentRoomCode) {
+      if (String(multiplayerState.room?.status || "").toLowerCase() === "in_game") {
+        gameSurfaceRoomCode = selectedRoom.roomCode;
+        forceHomeSurface = false;
+        setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
+        renderState();
+        return true;
+      } else {
+        gameSurfaceRoomCode = "";
+        forceHomeSurface = true;
+        setHomeStep("room-list");
+        multiplayerClient.send("request_sync");
+        return true;
+      }
+    }
+
+    if (hasActiveMultiplayerRoom() && selectedRoom.roomCode !== currentRoomCode) {
+      clearReconnectTimer();
+      reconnectAttempts = 0;
+      skipAutoReconnectOnNextClose = true;
+      multiplayerClient.disconnect();
+      multiplayerState.connecting = false;
+      multiplayerState.connected = false;
+      multiplayerState.connectionId = "";
+      multiplayerState.lastError = "";
+    }
+
+    const reconnectCandidate = Boolean(selectedReconnectToken);
+    multiplayerState.name = getDefaultPlayerName();
+    multiplayerState.lastError = "";
+    clearMultiplayerSessionIdentity({
+      preserveHomeStep: true,
+      preserveRoomSessions: true,
+    });
+    if (String(selectedRoom.status || "").toLowerCase() === "in_game") {
+      gameSurfaceRoomCode = selectedRoom.roomCode;
+      forceHomeSurface = false;
+    } else {
+      gameSurfaceRoomCode = "";
+      forceHomeSurface = true;
+    }
+    gameStateService.update({ gameStarted: false });
+    multiplayerState.roomCode = selectedRoom.roomCode;
+    multiplayerState.reconnectToken = reconnectCandidate ? String(selectedReconnectToken) : "";
+    const knownSession = getRoomSession(selectedRoom.roomCode);
+    multiplayerState.playerId = String(knownSession?.playerId || "");
+    persistMultiplayerState();
+    setHomeStep("room-list");
+    renderMultiplayerUi();
+    await ensureMultiplayerConnection();
+    const payload = {
+      roomCode: selectedRoom.roomCode,
+      name: multiplayerState.name || getDefaultPlayerName(),
+      profileToken: multiplayerState.profileToken || "",
+    };
+    if (reconnectCandidate && selectedReconnectToken) {
+      payload.reconnectToken = selectedReconnectToken;
+    }
+    const sent = await sendMultiplayerCommand("join_room", payload, {
+      errorMessage: "Could not open room. Check connection.",
+    });
+    if (!sent) {
+      multiplayerState.lastError = "not_connected";
+      gameSurfaceRoomCode = "";
+      forceHomeSurface = true;
+      setHomeStep("room-list");
+      renderMultiplayerUi();
+      return false;
+    }
+    const joined = await waitForRoomContext(selectedRoom.roomCode, 3000);
+    if (!joined) {
+      multiplayerState.lastError = "Could not sync selected room.";
+      renderMultiplayerUi();
+      return false;
+    }
+    if (String(multiplayerState.room?.status || "").toLowerCase() === "in_game") {
+      gameSurfaceRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+      forceHomeSurface = false;
+      setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
+      renderState();
+    }
+    refreshPlayerHub(true);
+    return true;
+  }
+
+  async function abandonSelectedHubRoom() {
+    const rooms = createHubRoomList();
+    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
+    if (!selectedRoom) {
+      return;
+    }
+    const actions = resolveHubRoomActions(selectedRoom);
+    if (!actions.canAbandon) {
+      multiplayerState.lastError = actions.hint;
+      renderMultiplayerUi();
+      return;
+    }
+    const entered = await ensureSelectedHubRoomContext(selectedRoom);
+    if (!entered) {
+      multiplayerState.lastError = "Could not enter this room to abandon the game.";
+      renderMultiplayerUi();
+      return;
+    }
+
+    if (isLocalPlayerHost()) {
+      const confirmedHost = typeof globalScope.confirm === "function"
+        ? globalScope.confirm("Abandon this room for all players?")
+        : true;
+      if (!confirmedHost) {
+        return;
+      }
+      await sendMultiplayerCommand("terminate_room", {}, {
+        errorMessage: "Could not abandon room. Check connection.",
+      });
+      return;
+    }
+
+    const confirmedLeave = typeof globalScope.confirm === "function"
+      ? globalScope.confirm("Abandon this room for your player?")
+      : true;
+    if (!confirmedLeave) {
+      return;
+    }
+    const sent = await sendMultiplayerCommand("leave_room", {}, {
+      errorMessage: "Could not leave room. Check connection.",
+    });
+    if (sent) {
+      teardownMultiplayerSession("Left multiplayer room");
+    }
+  }
+
   function renderMultiplayerUi() {
-    const nameInput = document.getElementById("mp-name");
-    const waitroomNameInput = document.getElementById("waitroom-name");
-    if (nameInput && document.activeElement !== nameInput) {
-      nameInput.value = multiplayerState.name || "";
-    }
-    if (waitroomNameInput && document.activeElement !== waitroomNameInput) {
-      waitroomNameInput.value = multiplayerState.name || "";
-    }
     const connectionNode = document.getElementById("mp-connection-status");
     if (connectionNode) {
       connectionNode.textContent = summarizeMultiplayerStatus();
     }
     const room = multiplayerState.room;
-    const isSoloOnlySession = selectedGameMode === "solo" && !hasActiveMultiplayerRoom();
     const roomStatusNode = document.getElementById("mp-room-status");
     if (roomStatusNode) {
-      roomStatusNode.style.display = isSoloOnlySession ? "none" : "";
+      roomStatusNode.style.display = "";
       if (!room) {
         roomStatusNode.textContent = "No room joined.";
       } else {
@@ -711,20 +1798,10 @@
             ? " | Waiting for all players to end turn"
             : "";
         roomStatusNode.textContent =
-          "Room " + String(room.code) + " | " + String(room.status || "lobby") + " | Host " + String(room.hostPlayerId || "-") + waitSuffix;
-      }
-    }
-    const waitroomStatusNode = document.getElementById("waitroom-status");
-    if (waitroomStatusNode) {
-      if (!room) {
-        waitroomStatusNode.textContent = "No room joined.";
-      } else {
-        waitroomStatusNode.textContent =
-          "Room " + String(room.code) + " | " + String(room.status || "lobby") + " | Host " + String(room.hostPlayerId || "-");
+          "Room " + formatRoomDisplayName(room.code) + " | " + String(room.status || "lobby") + " | Host " + toPlayerSeatLabel(room.hostPlayerId) + waitSuffix;
       }
     }
     const playerList = document.getElementById("mp-player-list");
-    const waitroomPlayerTableBody = document.getElementById("waitroom-player-table-body");
     const players = Array.isArray(room?.players) ? room.players : [];
     const playerRows = players
       .map((player) => {
@@ -732,7 +1809,7 @@
         const hostTag = player.playerId === room?.hostPlayerId ? " [host]" : "";
         const onlineTag = player.connected ? "online" : "offline";
         const turnTag = player.endedTurn ? "ended" : "playing";
-        return "<li>" + String(player.playerId) + meTag + hostTag + " - " + String(player.name || "Guest") + " - " + onlineTag + " - " + turnTag + "</li>";
+        return "<li>" + String(player.playerId) + meTag + hostTag + " - " + toPlayerSeatLabel(player.playerId) + " - " + onlineTag + " - " + turnTag + "</li>";
       })
       .join("");
     if (playerList) {
@@ -744,106 +1821,44 @@
       competitorPanel.innerHTML = "";
       competitorPanel.style.display = "none";
     }
-    if (waitroomPlayerTableBody) {
-      const canKick = Boolean(isLocalPlayerHost() && room?.status === "lobby");
-      waitroomPlayerTableBody.innerHTML = players.map((player) => {
-        const isMe = String(player?.playerId || "") === String(multiplayerState.playerId || "");
-        const status = player.connected ? "online" : "offline";
-        const turnTag = player.endedTurn ? "ended" : "playing";
-        const name = String(player.name || player.playerId || "Guest") +
-          (isMe ? " (you)" : "") +
-          (player.playerId === room?.hostPlayerId ? " [host]" : "");
-        const kickButton = canKick && !isMe
-          ? "<button type='button' class='button-destructive' data-action='waitroom-kick-player' data-player-id='" + String(player.playerId || "") + "'>Kick</button>"
-          : "";
-        return "<tr>" +
-          "<td>" + name + "</td>" +
-          "<td>" + status + "</td>" +
-          "<td>" + turnTag + "</td>" +
-          "<td>" + kickButton + "</td>" +
-          "</tr>";
-      }).join("");
-    }
-
-    const canRoomAction = Boolean(room && multiplayerState.connected);
     const resetButton = document.getElementById("reset-game");
     if (resetButton) {
-      resetButton.disabled = hasActiveMultiplayerRoom() && !isLocalPlayerHost();
+      resetButton.disabled = false;
+      if (hasActiveMultiplayerRoom()) {
+        resetButton.textContent = isLocalPlayerHost() ? "Abandon Room" : "Leave Room";
+      } else {
+        resetButton.textContent = "Abandon Game";
+      }
     }
-    const waitroomStartButton = document.getElementById("waitroom-start-game");
-    const waitroomCancelButton = document.getElementById("waitroom-cancel-room");
-    const waitroomLeaveButton = document.getElementById("waitroom-leave-room");
-    const waitroomUpdateNameButton = document.getElementById("waitroom-update-name");
-    if (waitroomStartButton) {
-      waitroomStartButton.style.display = isLocalPlayerHost() ? "" : "none";
-      waitroomStartButton.disabled = !canRoomAction || room?.status !== "lobby" || !isLocalPlayerHost();
-    }
-    if (waitroomCancelButton) {
-      waitroomCancelButton.style.display = isLocalPlayerHost() ? "" : "none";
-      waitroomCancelButton.disabled = !canRoomAction || !isLocalPlayerHost();
-    }
-    if (waitroomLeaveButton) {
-      waitroomLeaveButton.style.display = !isLocalPlayerHost() ? "" : "none";
-      waitroomLeaveButton.disabled = !canRoomAction;
-    }
-    if (waitroomUpdateNameButton) {
-      waitroomUpdateNameButton.disabled = !canRoomAction;
+    const backToLobbyButton = document.getElementById("back-to-lobby");
+    if (backToLobbyButton) {
+      const showBackToLobby = hasJoinedMultiplayerRoom();
+      backToLobbyButton.style.display = showBackToLobby ? "" : "none";
+      backToLobbyButton.disabled = !showBackToLobby;
     }
 
     const modeStep = document.getElementById("home-step-mode");
-    const multiplayerStep = document.getElementById("home-step-multiplayer");
     const roomListStep = document.getElementById("home-step-room-list");
-    const waitroomStep = document.getElementById("home-step-waitroom");
     const stepLabel = document.getElementById("home-step-label");
     const effectiveStep = resolveHomeStep();
     if (modeStep && modeStep.style) {
       modeStep.style.display = effectiveStep === "mode" ? "grid" : "none";
     }
-    if (multiplayerStep && multiplayerStep.style) {
-      multiplayerStep.style.display = effectiveStep === "multiplayer" ? "grid" : "none";
-    }
     if (roomListStep && roomListStep.style) {
       roomListStep.style.display = effectiveStep === "room-list" ? "grid" : "none";
     }
-    if (waitroomStep && waitroomStep.style) {
-      waitroomStep.style.display = effectiveStep === "waitroom" ? "grid" : "none";
-    }
     if (stepLabel) {
       if (effectiveStep === "mode") {
-        stepLabel.textContent = "Step 1 of 3";
-      } else if (effectiveStep === "multiplayer") {
-        stepLabel.textContent = "Step 2 of 3";
-      } else if (effectiveStep === "room-list") {
-        stepLabel.textContent = "Step 2 of 3 - Join a room";
+        stepLabel.textContent = "Home";
       } else {
-        stepLabel.textContent = "Step 3 of 3 - Room Waitroom";
+        stepLabel.textContent = "Room Details";
       }
     }
-    if (typeof document.querySelectorAll === "function") {
-      const modeButtons = Array.from(document.querySelectorAll("#game-mode-toggle [data-mode]"));
-      modeButtons.forEach((button) => {
-        const mode = String(button.getAttribute("data-mode") || "");
-        button.classList.toggle("mode-toggle__option--active", mode === selectedGameMode);
-      });
-    }
-    const continueButton = document.getElementById("home-mode-continue");
-    const modeHint = document.getElementById("home-mode-hint");
-    const variableSetupModeSection = document.getElementById("home-variable-setup-mode");
     const variableSetupMultiplayerSection = document.getElementById("home-variable-setup-multiplayer");
-    if (continueButton) {
-      continueButton.textContent = selectedGameMode === "solo" ? "Start Solo Game" : "Continue";
-      continueButton.disabled = selectedGameMode === "first";
-    }
-    if (variableSetupModeSection && variableSetupModeSection.style) {
-      variableSetupModeSection.style.display = selectedGameMode === "solo" ? "grid" : "none";
-    }
     if (variableSetupMultiplayerSection && variableSetupMultiplayerSection.style) {
-      variableSetupMultiplayerSection.style.display = selectedGameMode === "international" ? "grid" : "none";
+      variableSetupMultiplayerSection.style.display = "grid";
     }
     [
-      "var-setup-order-mode",
-      "var-setup-idea-mode",
-      "var-setup-parts-mode",
       "var-setup-order-multiplayer",
       "var-setup-idea-multiplayer",
       "var-setup-parts-multiplayer",
@@ -855,16 +1870,8 @@
       const option = String(input.getAttribute("data-variable-setup-option") || "");
       input.checked = Boolean(selectedVariableSetup[option]);
     });
-    if (modeHint) {
-      if (selectedGameMode === "solo") {
-        modeHint.textContent = "Solo starts immediately.";
-      } else if (selectedGameMode === "first") {
-        modeHint.textContent = "My First Unvention is coming soon.";
-      } else {
-        modeHint.textContent = "Continue to multiplayer setup.";
-      }
-    }
     renderRoomDirectory();
+    renderHubUi();
   }
 
   function importSharedRoomLog(room) {
@@ -889,7 +1896,21 @@
   }
 
   async function ensureMultiplayerConnection() {
-    if (multiplayerState.connected || multiplayerState.connecting) {
+    if (multiplayerState.connected) {
+      return;
+    }
+    if (multiplayerState.connecting) {
+      try {
+        await multiplayerClient.connect(multiplayerState.url);
+        multiplayerState.connected = true;
+        multiplayerState.connecting = false;
+        multiplayerState.lastError = "";
+      } catch (error) {
+        multiplayerState.connecting = false;
+        multiplayerState.connected = false;
+        multiplayerState.lastError = String(error?.message || "connect_failed");
+      }
+      renderMultiplayerUi();
       return;
     }
     if (shouldNormalizeLocalDevMultiplayerUrl(multiplayerState.url)) {
@@ -940,6 +1961,27 @@
     }
   }
 
+  async function sendMultiplayerCommand(type, payload, optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const errorMessage = String(options.errorMessage || "not_connected");
+    if (multiplayerClient.send(type, payload || {})) {
+      return true;
+    }
+    if (options.tryReconnect !== false) {
+      await ensureMultiplayerConnection();
+      if (multiplayerClient.send(type, payload || {})) {
+        return true;
+      }
+    }
+    multiplayerState.lastError = errorMessage;
+    renderMultiplayerUi();
+    loggerService.logEvent("warn", "Multiplayer command failed to send", {
+      type: String(type || ""),
+      source: "network",
+    });
+    return false;
+  }
+
   function hasJoinedMultiplayerRoom() {
     return Boolean(multiplayerState.room && multiplayerState.room.code && multiplayerState.room.status === "in_game");
   }
@@ -971,6 +2013,19 @@
       return String(match.name || "").trim();
     }
     return playerId;
+  }
+
+  function toPlayerSeatLabel(playerIdInput) {
+    const playerId = String(playerIdInput || "").trim().toUpperCase();
+    const match = /^P(\d+)$/.exec(playerId);
+    if (match) {
+      return "Player " + String(match[1]);
+    }
+    return playerId ? "Player " + playerId : "Player";
+  }
+
+  function getDefaultPlayerName() {
+    return "Player";
   }
 
   function escapeHtml(valueInput) {
@@ -1111,7 +2166,7 @@
         : "waiting";
       return "<article class='mp-competitor-card'>" +
         "<div class='mp-competitor-card__head'>" +
-        "<strong class='mp-competitor-card__name'>" + escapeHtml(player.name || player.playerId || "Guest") + "</strong>" +
+        "<strong class='mp-competitor-card__name'>" + escapeHtml(toPlayerSeatLabel(player.playerId)) + "</strong>" +
         "<span class='mp-competitor-card__status'>" + escapeHtml(statusText) + "</span>" +
         "</div>" +
         "<div class='mp-competitor-card__meta'>Phase: " + escapeHtml(livePhase) + " | " + escapeHtml(syncText) + "</div>" +
@@ -1236,9 +2291,7 @@
     }
     container.innerHTML = ids.map((playerId) => {
       const isSelected = playerId === view.playerId;
-      const label = playerId === String(activePlayerId || "")
-        ? "You"
-        : (resolvePlayerName(playerId) || playerId);
+      const label = toPlayerSeatLabel(playerId);
       return (
         '<button type="button" class="section-player-tab' +
         (isSelected ? " section-player-tab--active" : "") +
@@ -1266,6 +2319,11 @@
   function renderPlayerStateTitle() {
     const titleNode = document.getElementById("player-state-title");
     if (!titleNode) {
+      return;
+    }
+    if (hasActiveMultiplayerRoom()) {
+      const roomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+      titleNode.textContent = "Snapshot • " + formatRoomDisplayName(roomCode);
       return;
     }
     titleNode.textContent = "Snapshot";
@@ -1646,6 +2704,7 @@
   }
 
   multiplayerClient.onOpen(() => {
+    skipAutoReconnectOnNextClose = false;
     clearReconnectTimer();
     reconnectAttempts = 0;
     multiplayerState.connecting = false;
@@ -1661,6 +2720,10 @@
     multiplayerState.connectionId = "";
     renderMultiplayerUi();
     loggerService.logEvent("warn", "Disconnected from multiplayer server", { source: "ui" });
+    if (skipAutoReconnectOnNextClose) {
+      skipAutoReconnectOnNextClose = false;
+      return;
+    }
     scheduleAutoReconnect();
   });
 
@@ -1692,13 +2755,24 @@
       }
       activePlayerId = multiplayerState.playerId || activePlayerId;
       multiplayerState.reconnectToken = String(message.reconnectToken || "");
+      if (!forceHomeSurface && normalizeRoomCode(gameSurfaceRoomCode) === normalizeRoomCode(multiplayerState.roomCode)) {
+        setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
+      }
+      if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
+        upsertRoomSession(multiplayerState.roomCode, {
+          playerId: multiplayerState.playerId,
+          reconnectToken: multiplayerState.reconnectToken,
+          lastKnownStatus: "lobby",
+        });
+      }
       appliedServerTurnKey = "";
       awaitingRoomStateRecovery = true;
-      homeStep = "waitroom";
+      homeStep = "room-list";
       persistHomeUiState();
       persistMultiplayerState();
       gameStateService.update({ gameStarted: false });
       renderMultiplayerUi();
+      refreshPlayerHub(true);
       loggerService.logEvent("info", "Joined multiplayer room", {
         roomCode: multiplayerState.roomCode,
         playerId: multiplayerState.playerId,
@@ -1728,13 +2802,29 @@
       if (message?.you?.reconnectToken) {
         multiplayerState.reconnectToken = String(message.you.reconnectToken);
       }
+      const knownReconnectToken = String(
+        multiplayerState.reconnectToken || getReconnectTokenForRoom(multiplayerState.room?.code || ""),
+      );
+      if (multiplayerState.room?.code && knownReconnectToken) {
+        upsertRoomSession(multiplayerState.room.code, {
+          playerId: multiplayerState.playerId,
+          reconnectToken: knownReconnectToken,
+          lastKnownStatus: String(multiplayerState.room.status || "unknown"),
+        });
+      }
       const incomingLiveState = message?.you?.liveState && typeof message.you.liveState === "object"
         ? message.you.liveState
         : null;
+      const incomingRoomStatus = String(multiplayerState.room?.status || "").toLowerCase();
+      homeStep = "room-list";
+      if (incomingRoomStatus === "lobby") {
+        gameSurfaceRoomCode = "";
+        forceHomeSurface = true;
+      }
       persistMultiplayerState();
       persistHomeUiState();
       if (awaitingRoomStateRecovery && incomingLiveState) {
-        const recoveredState = normalizeRecoveredLiveState(incomingLiveState);
+      const recoveredState = normalizeRecoveredLiveState(incomingLiveState);
         const roomTurn = Number(multiplayerState.room?.turn?.number || 0);
         const roomDay = String(multiplayerState.room?.turn?.day || "");
         if (
@@ -1746,8 +2836,15 @@
         }
       }
       syncLocalGameToRoom(multiplayerState.room);
+      if (incomingRoomStatus === "in_game" && !forceHomeSurface) {
+        const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+        if (currentRoomCode && currentRoomCode === normalizeRoomCode(gameSurfaceRoomCode)) {
+          setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
+        }
+      }
       renderMultiplayerUi();
       renderState();
+      refreshPlayerHub(false);
       return;
     }
     if (type === "turn_advanced") {
@@ -1770,6 +2867,11 @@
             rolledAt: Date.now(),
           },
         };
+        upsertRoomSession(message.roomCode, {
+          playerId: multiplayerState.playerId,
+          reconnectToken: multiplayerState.reconnectToken,
+          lastKnownStatus: "in_game",
+        });
       }
       syncLocalGameToRoom(multiplayerState.room);
       loggerService.logEvent("info", "Online turn advanced", {
@@ -1779,6 +2881,7 @@
         roll: message.roll,
         source: "network",
       });
+      refreshPlayerHub(false);
       return;
     }
     if (type === "game_completed") {
@@ -1788,6 +2891,11 @@
           ...multiplayerState.room,
           status: "completed",
         };
+        upsertRoomSession(message.roomCode, {
+          playerId: multiplayerState.playerId,
+          reconnectToken: multiplayerState.reconnectToken,
+          lastKnownStatus: "completed",
+        });
       }
       loggerService.logEvent("info", "Online game completed", {
         roomCode: message.roomCode,
@@ -1795,6 +2903,7 @@
         source: "network",
       });
       renderMultiplayerUi();
+      refreshPlayerHub(true);
       return;
     }
     if (type === "removed_from_room") {
@@ -1813,8 +2922,18 @@
     if (type === "error") {
       const code = String(message.code || "server_error");
       const detail = String(message.message || code);
+      if (code === "already_in_room") {
+        multiplayerState.lastError = "Already connected to a room. Opening room.";
+        setHomeStep("room-list");
+        multiplayerClient.send("request_sync");
+        renderMultiplayerUi();
+        loggerService.logEvent("warn", "Multiplayer server error", { code, detail, source: "network" });
+        return;
+      }
       if (code === "room_not_found" || code === "room_full" || code === "room_in_progress" || code === "turn_mismatch") {
-        clearMultiplayerSessionIdentity();
+        clearMultiplayerSessionIdentity({
+          removeCurrentRoomSession: code === "room_not_found",
+        });
       }
       multiplayerState.lastError = detail;
       renderMultiplayerUi();
@@ -1826,9 +2945,13 @@
     const newGameScreen = document.getElementById("new-game-screen");
     const appShell = document.getElementById("app-shell");
     const footer = document.getElementById("action-footer");
-    const showGameSurface = Boolean(started);
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const isMultiplayerSurface = hasActiveMultiplayerRoom()
+      ? currentRoomCode && currentRoomCode === normalizeRoomCode(gameSurfaceRoomCode)
+      : true;
+    const showGameSurface = Boolean(started) && !forceHomeSurface && Boolean(isMultiplayerSurface);
     if (newGameScreen && newGameScreen.style) {
-      newGameScreen.style.display = showGameSurface ? "none" : "grid";
+      newGameScreen.style.display = showGameSurface ? "none" : "flex";
     }
     if (appShell && appShell.style) {
       appShell.style.display = showGameSurface ? "grid" : "none";
@@ -2049,7 +3172,7 @@
       : "";
     const currentTurn = "Turn " + String(state.turnNumber || 1);
     const contextCrumbs = roomCode
-      ? ["Room " + roomCode, "Seed " + currentSeed, currentDay, currentTurn]
+      ? ["Room " + formatRoomDisplayName(roomCode), "Seed " + currentSeed, currentDay, currentTurn]
       : ["Seed " + currentSeed, currentDay, currentTurn];
     const phaseOffset = contextCrumbs.length;
     const crumbs = contextCrumbs
@@ -2650,9 +3773,7 @@
     if (!isGameStarted(state) && hasActiveMultiplayerRoom()) {
       const room = multiplayerState.room || {};
       const players = Array.isArray(room.players) ? room.players : [];
-      const playerNames = players
-        .map((player) => String(player.name || player.playerId || "Guest"))
-        .join(", ");
+      const playerNames = players.map((player) => toPlayerSeatLabel(player.playerId)).join(", ");
       const canHostStart = isLocalPlayerHost() && room.status === "lobby" && players.length >= 1;
       const hostControls = isLocalPlayerHost()
         ? (
@@ -2666,7 +3787,7 @@
             '<button type="button" class="journal-chip button-destructive" data-action="mp-leave-lobby">Leave Room</button>'
           );
       controls.innerHTML =
-        "<div class='journal-control-row'><strong>Room " + String(room.code || "-") + "</strong></div>" +
+        "<div class='journal-control-row'><strong>Room " + escapeHtml(formatRoomDisplayName(room.code || "-")) + "</strong></div>" +
         "<div class='journal-control-row'><span class='journal-muted'>Players: " + (playerNames || "none") + "</span></div>" +
         "<div class='journal-control-row'>" + hostControls + "</div>";
       if (controls.style) {
@@ -4284,24 +5405,6 @@
     renderState();
   });
 
-  const soloFlow = typeof root.createSoloFlow === "function"
-    ? root.createSoloFlow({
-        documentRef: typeof document !== "undefined" ? document : null,
-        undoStack,
-        gameStateService,
-        persistUndoHistory,
-        loggerService,
-        roundEngineService,
-        generateRandomSeed,
-        resolveNewGameConfig: resolveHomeNewGameConfig,
-        renderState,
-      })
-    : null;
-  const startSoloGame = soloFlow?.startSoloGame || function fallbackStartSoloGame() {};
-  if (soloFlow && typeof soloFlow.bindLegacyStartButton === "function") {
-    soloFlow.bindLegacyStartButton();
-  }
-
   const homeModeFlow = typeof root.createHomeModeFlow === "function"
     ? root.createHomeModeFlow({
         documentRef: typeof document !== "undefined" ? document : null,
@@ -4310,18 +5413,15 @@
         multiplayerClient,
         ensureMultiplayerConnection,
         clearMultiplayerSessionIdentity,
+        resetMultiplayerForHomeAction,
         gameStateService,
         persistMultiplayerState,
         renderMultiplayerUi,
         refreshRoomDirectory,
+        refreshPlayerHub,
+        resetLocalMultiplayerMemory,
         setHomeStep,
-        startSoloGame,
-        getSelectedGameMode() {
-          return selectedGameMode;
-        },
-        setSelectedGameMode(nextMode) {
-          selectedGameMode = String(nextMode || "solo");
-        },
+        getDefaultPlayerName,
         getVariableSetupSelection,
         setVariableSetupSelection,
         persistHomeUiState,
@@ -4331,69 +5431,59 @@
     homeModeFlow.bindHomeControls();
   }
 
-  const waitroomUpdateNameButton = document.getElementById("waitroom-update-name");
-  if (waitroomUpdateNameButton) {
-    waitroomUpdateNameButton.addEventListener("click", function onUpdateWaitroomName() {
-      const waitroomNameInput = document.getElementById("waitroom-name");
-      const nextName = String(waitroomNameInput?.value || "").trim();
-      if (!nextName) {
-        return;
-      }
-      multiplayerState.name = nextName;
-      persistMultiplayerState();
-      if (hasActiveMultiplayerRoom()) {
-        multiplayerClient.send("rename_player", { name: nextName });
-      }
-      renderMultiplayerUi();
-    });
-  }
-
-  const waitroomStartGameButton = document.getElementById("waitroom-start-game");
-  if (waitroomStartGameButton) {
-    waitroomStartGameButton.addEventListener("click", function onStartWaitroomGame() {
-      multiplayerClient.send("start_game");
-    });
-  }
-
-  const waitroomCancelRoomButton = document.getElementById("waitroom-cancel-room");
-  if (waitroomCancelRoomButton) {
-    waitroomCancelRoomButton.addEventListener("click", function onCancelWaitroomRoom() {
-      const confirmed = typeof globalScope.confirm === "function"
-        ? globalScope.confirm("Abandon this room for all players?")
-        : true;
-      if (!confirmed) {
-        return;
-      }
-      multiplayerClient.send("terminate_room");
-    });
-  }
-
-  const waitroomLeaveRoomButton = document.getElementById("waitroom-leave-room");
-  if (waitroomLeaveRoomButton) {
-    waitroomLeaveRoomButton.addEventListener("click", function onLeaveWaitroomRoom() {
-      const confirmed = typeof globalScope.confirm === "function"
-        ? globalScope.confirm("Leave this multiplayer room?")
-        : true;
-      if (!confirmed) {
-        return;
-      }
-      multiplayerClient.send("leave_room");
-      teardownMultiplayerSession("Left multiplayer room");
-    });
-  }
-
-  const waitroomPlayerTableBody = document.getElementById("waitroom-player-table-body");
-  if (waitroomPlayerTableBody) {
-    waitroomPlayerTableBody.addEventListener("click", function onWaitroomKickClick(event) {
+  const hubRoomList = document.getElementById("mp-hub-room-list");
+  if (hubRoomList) {
+    hubRoomList.addEventListener("click", function onHubRoomListClick(event) {
       const target = event.target;
       if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
         return;
       }
-      const button = target.closest("button[data-action='waitroom-kick-player']");
+      const roomLink = target.closest("[data-action='hub-select-room']");
+      if (!roomLink) {
+        return;
+      }
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      const roomCode = String(roomLink.getAttribute("data-room-code") || "").trim().toUpperCase();
+      if (!roomCode) {
+        return;
+      }
+      selectHubRoom(roomCode);
+    });
+  }
+
+  const homeRoomOpenButton = document.getElementById("home-room-open");
+  if (homeRoomOpenButton) {
+    homeRoomOpenButton.addEventListener("click", async function onHomeRoomOpenClick() {
+      await runSelectedHubPrimaryAction();
+    });
+  }
+
+  const homeRoomAbandonButton = document.getElementById("home-room-abandon");
+  if (homeRoomAbandonButton) {
+    homeRoomAbandonButton.addEventListener("click", async function onHomeRoomAbandonClick() {
+      await abandonSelectedHubRoom();
+    });
+  }
+
+  const hubRoomPlayerTableBody = document.getElementById("mp-hub-room-player-table-body");
+  if (hubRoomPlayerTableBody) {
+    hubRoomPlayerTableBody.addEventListener("click", async function onHubRoomKickClick(event) {
+      const target = event.target;
+      if (typeof globalScope.HTMLElement !== "undefined" && !(target instanceof globalScope.HTMLElement)) {
+        return;
+      }
+      const button = target.closest("button[data-action='hub-kick-player']");
       if (!button) {
         return;
       }
-      if (!isLocalPlayerHost() || String(multiplayerState.room?.status || "") !== "lobby") {
+      if (!isLocalPlayerHost()) {
+        return;
+      }
+      const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+      const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+      if (!currentRoomCode || currentRoomCode !== selectedCode) {
         return;
       }
       const playerId = String(button.getAttribute("data-player-id") || "").trim();
@@ -4406,19 +5496,51 @@
       if (!confirmed) {
         return;
       }
-      multiplayerClient.send("kick_player", { playerId });
+      await sendMultiplayerCommand("kick_player", { playerId }, {
+        errorMessage: "Could not kick player. Check connection.",
+      });
     });
   }
 
-  document.getElementById("reset-game").addEventListener("click", function onResetGame() {
-    if (hasActiveMultiplayerRoom() && isLocalPlayerHost()) {
-      const confirmedHost = typeof globalScope.confirm === "function"
-        ? globalScope.confirm("Terminate this multiplayer room for all players?")
-        : true;
-      if (!confirmedHost) {
+  const backToLobbyButton = document.getElementById("back-to-lobby");
+  if (backToLobbyButton) {
+    backToLobbyButton.addEventListener("click", function onBackToLobby() {
+      if (!hasJoinedMultiplayerRoom()) {
         return;
       }
-      multiplayerClient.send("terminate_room");
+      gameSurfaceRoomCode = "";
+      forceHomeSurface = true;
+      setHomeStep("room-list");
+      renderState();
+    });
+  }
+
+  document.getElementById("reset-game").addEventListener("click", async function onResetGame() {
+    if (hasActiveMultiplayerRoom()) {
+      if (isLocalPlayerHost()) {
+        const confirmedHost = typeof globalScope.confirm === "function"
+          ? globalScope.confirm("Terminate this multiplayer room for all players?")
+          : true;
+        if (!confirmedHost) {
+          return;
+        }
+        await sendMultiplayerCommand("terminate_room", {}, {
+          errorMessage: "Could not abandon room. Check connection.",
+        });
+        return;
+      }
+      const confirmedLeave = typeof globalScope.confirm === "function"
+        ? globalScope.confirm("Leave this multiplayer room?")
+        : true;
+      if (!confirmedLeave) {
+        return;
+      }
+      const sent = await sendMultiplayerCommand("leave_room", {}, {
+        errorMessage: "Could not leave room. Check connection.",
+      });
+      if (sent) {
+        teardownMultiplayerSession("Left multiplayer room");
+      }
       return;
     }
     const confirmed = typeof globalScope.confirm === "function"

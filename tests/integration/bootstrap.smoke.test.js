@@ -34,7 +34,7 @@ test('bootstrap wires round controls and reset action', () => {
           },
         };
       }
-      if (id === 'new-game-seed') {
+      if (id === 'mp-seed') {
         return {
           get value() {
             return uiState.seedInputValue;
@@ -68,7 +68,7 @@ test('bootstrap wires round controls and reset action', () => {
     turnNumber: 1,
     phase: 'journal',
     gameStatus: 'active',
-    gameStarted: true,
+    gameStarted: false,
     players: [],
     rngSeed: 'default-seed',
     rngState: 3288473048,
@@ -172,18 +172,12 @@ test('bootstrap wires round controls and reset action', () => {
 
   assert.equal(loggerCalls.length, 2);
   assert.equal(loggerCalls[0].message, 'Logging system initialized');
-  assert.ok(uiState.footerBreadcrumb.includes('default-seed'));
-  assert.ok(uiState.footerBreadcrumb.includes('Friday'));
 
   listeners['advance-phase:click']();
-  uiState.seedInputValue = 'abc123';
-  listeners['start-new-game:click']();
   listeners['reset-game:click']();
 
   const messages = loggerCalls.map((entry) => entry.message);
   assert.ok(messages.includes('Phase advanced'));
-  assert.ok(messages.includes('New game started'));
-  assert.ok(messages.includes('RNG seed updated'));
   assert.ok(messages.includes('Game reset; returned to New Game screen'));
   assert.equal(resetCalled, true);
 

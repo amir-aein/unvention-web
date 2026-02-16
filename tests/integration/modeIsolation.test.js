@@ -11,28 +11,6 @@ function buildHarness() {
   const uiState = {
     seedInputValue: '',
   };
-  const modeButtons = {
-    solo: {
-      getAttribute(name) {
-        return name === 'data-mode' ? 'solo' : '';
-      },
-      hasAttribute(name) {
-        return name === 'disabled' ? false : false;
-      },
-      classList: { toggle() {} },
-    },
-    international: {
-      getAttribute(name) {
-        return name === 'data-mode' ? 'international' : '';
-      },
-      hasAttribute(name) {
-        return name === 'disabled' ? false : false;
-      },
-      classList: { toggle() {} },
-    },
-  };
-  let initializePlayersCalls = 0;
-  let setSeedCalls = 0;
 
   const currentState = {
     version: 1,
@@ -61,58 +39,56 @@ function buildHarness() {
     logs: [],
   };
 
-  globalThis.confirm = () => true;
-  globalThis.document = {
-    querySelectorAll(selector) {
-      if (selector === '#game-mode-toggle [data-mode]') {
-        return [modeButtons.solo, modeButtons.international];
-      }
+  const makeNode = () => ({
+    style: {},
+    classList: { toggle() {} },
+    set textContent(_value) {},
+    set innerHTML(_value) {},
+    getAttribute(_name) {
+      return '';
+    },
+    hasAttribute(_name) {
+      return false;
+    },
+    closest() {
+      return null;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
       return [];
     },
+    addEventListener(eventName, callback) {
+      listeners[this.__id + ':' + eventName] = callback;
+    },
+  });
+
+  globalThis.confirm = () => true;
+  globalThis.document = {
+    querySelectorAll() {
+      return [];
+    },
+    querySelector() {
+      return null;
+    },
     getElementById(id) {
-      if (id === 'new-game-seed') {
-        return {
-          get value() {
+      if (id === 'mp-seed') {
+        const node = makeNode();
+        node.__id = id;
+        Object.defineProperty(node, 'value', {
+          get() {
             return uiState.seedInputValue;
           },
-          set value(value) {
+          set(value) {
             uiState.seedInputValue = value;
           },
-          addEventListener(eventName, callback) {
-            listeners[id + ':' + eventName] = callback;
-          },
-        };
+        });
+        return node;
       }
-      if (id === 'footer-hint' || id === 'footer-breadcrumb') {
-        return {
-          set textContent(_value) {},
-          set innerHTML(_value) {},
-          addEventListener(eventName, callback) {
-            listeners[id + ':' + eventName] = callback;
-          },
-        };
-      }
-      return {
-        style: {},
-        classList: { toggle() {} },
-        set textContent(_value) {},
-        set innerHTML(_value) {},
-        getAttribute(name) {
-          if (name === 'data-mode') {
-            return 'solo';
-          }
-          return '';
-        },
-        hasAttribute(_name) {
-          return false;
-        },
-        closest(_selector) {
-          return null;
-        },
-        addEventListener(eventName, callback) {
-          listeners[id + ':' + eventName] = callback;
-        },
-      };
+      const node = makeNode();
+      node.__id = id;
+      return node;
     },
   };
 
@@ -134,8 +110,8 @@ function buildHarness() {
     createContainer() {
       return {
         loggerService: {
-          logEvent(_level, _message, _context) {
-            return { id: Date.now(), context: _context || {} };
+          logEvent(_level, _message, context) {
+            return { id: Date.now(), context: context || {} };
           },
           subscribe(listener) {
             listener([]);
@@ -145,6 +121,7 @@ function buildHarness() {
             return [];
           },
           replaceEntries() {},
+          clear() {},
         },
         gameStateService: {
           getState() {
@@ -167,9 +144,7 @@ function buildHarness() {
           },
         },
         roundEngineService: {
-          initializePlayers() {
-            initializePlayersCalls += 1;
-          },
+          initializePlayers() {},
           getPhases() {
             return ['journal', 'workshop', 'build', 'invent'];
           },
@@ -181,9 +156,7 @@ function buildHarness() {
           },
           advancePhase() {},
           updatePlayerJournalCompletion() {},
-          setSeed() {
-            setSeedCalls += 1;
-          },
+          setSeed() {},
           selectJournalingGroup() {},
           selectJournal() {},
           selectActiveJournalNumber() {},
@@ -209,9 +182,7 @@ function buildHarness() {
     listeners,
     currentState,
     sendCalls,
-    modeButtons,
-    getInitializePlayersCalls: () => initializePlayersCalls,
-    getSetSeedCalls: () => setSeedCalls,
+    uiState,
   };
 }
 
@@ -223,51 +194,49 @@ function cleanupGlobals() {
   delete globalThis.sessionStorage;
 }
 
-test('solo mode start does not send multiplayer commands', () => {
+test('multiplayer create action sends create_room and does not start local game', async () => {
   resetBootstrapModule();
   const harness = buildHarness();
+  harness.uiState.seedInputValue = 'SEED-123';
   require('../../src/app/bootstrap.js');
 
-  harness.listeners['home-mode-continue:click']();
+  await harness.listeners['home-create-room:click']();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(harness.getInitializePlayersCalls(), 1);
-  assert.equal(harness.getSetSeedCalls(), 1);
-  assert.equal(harness.currentState.gameStarted, true);
-  assert.equal(harness.sendCalls.length, 0);
+  assert.equal(harness.currentState.gameStarted, false);
+  assert.equal(harness.sendCalls.length, 1);
+  assert.equal(harness.sendCalls[0].type, 'create_room');
+  assert.equal(harness.sendCalls[0].payload.seed, 'SEED-123');
 
   cleanupGlobals();
 });
 
-test('international mode continue does not trigger solo initialization', () => {
+test('joining an open room from directory sends join_room with selected room code', async () => {
   resetBootstrapModule();
   const harness = buildHarness();
-  globalThis.localStorage = {
-    getItem(key) {
-      if (key === 'unvention.homeUi.v1') {
-        return JSON.stringify({
-          selectedGameMode: 'international',
-          homeStep: 'mode',
-        });
-      }
-      return null;
-    },
-    setItem() {},
-    removeItem() {},
-  };
-  globalThis.sessionStorage = {
-    getItem() {
-      return null;
-    },
-    setItem() {},
-    removeItem() {},
-  };
   require('../../src/app/bootstrap.js');
 
-  harness.listeners['home-mode-continue:click']();
+  const clickListener = harness.listeners['mp-room-directory:click'];
+  assert.equal(typeof clickListener, 'function');
+  clickListener({
+    target: {
+      closest(selector) {
+        if (selector === "button[data-action='join-listed-room']") {
+          return {
+            getAttribute(name) {
+              return name === 'data-room-code' ? 'AB12CD' : '';
+            },
+          };
+        }
+        return null;
+      },
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(harness.getInitializePlayersCalls(), 0);
-  assert.equal(harness.currentState.gameStarted, false);
-  assert.equal(harness.sendCalls.length, 0);
+  assert.equal(harness.sendCalls.length, 1);
+  assert.equal(harness.sendCalls[0].type, 'join_room');
+  assert.equal(harness.sendCalls[0].payload.roomCode, 'AB12CD');
 
   cleanupGlobals();
 });

@@ -5,113 +5,98 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-16" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-46" />
   </head>
   <body>
     <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
-      <div class="new-game-card">
-        <h1>Unvention: International Exhibition</h1>
-        <p id="home-step-label" class="mp-status-line">Step 1 of 3</p>
-        <section id="home-step-mode" class="mp-setup">
-          <h2>Game Mode</h2>
-          <div class="mode-toggle" id="game-mode-toggle">
-            <button type="button" data-mode="solo" class="mode-toggle__option mode-toggle__option--active">Solo</button>
-            <button type="button" data-mode="first" class="mode-toggle__option" disabled>My First (coming soon)</button>
-            <button type="button" data-mode="international" class="mode-toggle__option">International</button>
+      <aside class="home-sidebar">
+        <h1 class="home-sidebar__title">UNVENTION</h1>
+        <p id="mp-connection-status" class="mp-status-line">Offline</p>
+        <a id="home-sidebar-home" class="home-sidebar__nav-item" role="button" tabindex="0" data-action="hub-home-nav">Home</a>
+        <div class="home-sidebar__rooms">
+          <div class="home-sidebar__rooms-head">
+            <strong>Rooms</strong>
+            <div class="home-sidebar__rooms-actions">
+              <button id="home-refresh-rooms" type="button">Refresh</button>
+              <button id="home-reset-local-session" type="button" class="button-destructive">Reset Local</button>
+            </div>
           </div>
-          <label for="new-game-seed">Seed (optional)</label>
-          <input id="new-game-seed" type="text" placeholder="Leave blank for random seed" />
-          <section id="home-variable-setup-mode" class="variable-setup" style="display:none">
-            <h3>Variable Setup</h3>
-            <label class="variable-setup__item" for="var-setup-order-mode">
-              <input id="var-setup-order-mode" type="checkbox" data-variable-setup-option="order" />
-              <span>order</span>
-            </label>
-            <label class="variable-setup__item" for="var-setup-idea-mode">
-              <input id="var-setup-idea-mode" type="checkbox" data-variable-setup-option="idea" />
-              <span>idea</span>
-            </label>
-            <label class="variable-setup__item" for="var-setup-parts-mode">
-              <input id="var-setup-parts-mode" type="checkbox" data-variable-setup-option="parts" />
-              <span>parts</span>
-            </label>
+          <p id="hub-profile-line" class="mp-status-line">Loading player history...</p>
+          <div id="mp-hub-room-list" class="mp-hub-room-list"></div>
+        </div>
+      </aside>
+      <main class="home-main">
+        <div class="new-game-card">
+          <p id="home-step-label" class="mp-status-line">Home</p>
+          <section id="home-step-mode" class="mp-setup">
+            <h2>Home</h2>
+            <div class="home-create-grid home-create-grid--single">
+              <section class="home-mp-panel">
+                <h3>Create a multiplayer game</h3>
+                <label for="mp-seed">Seed (optional)</label>
+                <input id="mp-seed" type="text" placeholder="e.g. XASDWAD" />
+                <section id="home-variable-setup-multiplayer" class="variable-setup">
+                  <h3>Variable setup</h3>
+                  <label class="variable-setup__item" for="var-setup-order-multiplayer">
+                    <input id="var-setup-order-multiplayer" type="checkbox" data-variable-setup-option="order" />
+                    <span>Randomize part location</span>
+                  </label>
+                  <label class="variable-setup__item" for="var-setup-idea-multiplayer">
+                    <input id="var-setup-idea-multiplayer" type="checkbox" data-variable-setup-option="idea" />
+                    <span>Start with additional idea</span>
+                  </label>
+                  <label class="variable-setup__item" for="var-setup-parts-multiplayer">
+                    <input id="var-setup-parts-multiplayer" type="checkbox" data-variable-setup-option="parts" />
+                    <span>Remove parts</span>
+                  </label>
+                </section>
+                <div class="mp-setup__buttons">
+                  <button id="home-create-room" type="button">Create a multiplayer room</button>
+                </div>
+              </section>
+            </div>
+            <section id="mp-room-directory" class="home-mp-panel">
+              <h3>Open Rooms</h3>
+              <table class="mp-room-directory__table">
+                <thead>
+                  <tr>
+                    <th>Room</th>
+                    <th>Players</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="mp-room-directory-body"></tbody>
+              </table>
+            </section>
           </section>
-          <div class="mp-setup__buttons">
-            <button id="home-mode-continue" type="button">Continue</button>
-          </div>
-          <p id="home-mode-hint" class="mp-status-line">Choose a mode to continue.</p>
-        </section>
-        <section id="home-step-multiplayer" class="mp-setup" style="display:none">
-          <h2>Multiplayer Setup</h2>
-          <label for="mp-name">Your Name</label>
-          <input id="mp-name" type="text" placeholder="Guest" />
-          <section id="home-variable-setup-multiplayer" class="variable-setup" style="display:none">
-            <h3>Variable Setup</h3>
-            <label class="variable-setup__item" for="var-setup-order-multiplayer">
-              <input id="var-setup-order-multiplayer" type="checkbox" data-variable-setup-option="order" />
-              <span>order</span>
-            </label>
-            <label class="variable-setup__item" for="var-setup-idea-multiplayer">
-              <input id="var-setup-idea-multiplayer" type="checkbox" data-variable-setup-option="idea" />
-              <span>idea</span>
-            </label>
-            <label class="variable-setup__item" for="var-setup-parts-multiplayer">
-              <input id="var-setup-parts-multiplayer" type="checkbox" data-variable-setup-option="parts" />
-              <span>parts</span>
-            </label>
-          </section>
-          <div class="mp-setup__buttons">
-            <button id="home-create-room" type="button">Create New Room</button>
-            <button id="home-join-room-step" type="button">Join Room</button>
-            <button id="home-back-to-mode" type="button">Back</button>
-          </div>
-          <p id="mp-connection-status" class="mp-status-line">Offline</p>
-        </section>
-        <section id="home-step-room-list" class="mp-setup" style="display:none">
-          <h2>Available Rooms</h2>
-          <div id="mp-room-directory" class="mp-room-directory">
+          <section id="home-step-room-list" class="mp-setup" style="display:none">
+            <h2>Room Details</h2>
+            <h3 id="mp-hub-room-title">Select a room</h3>
+            <p id="mp-hub-room-meta" class="mp-status-line">Pick a room from the sidebar.</p>
+            <div class="mp-setup__buttons">
+              <button id="home-room-open" type="button">Primary Action</button>
+              <button id="home-room-abandon" type="button" class="button-destructive">Abandon Game</button>
+            </div>
+            <p id="home-room-action-hint" class="mp-status-line"></p>
+            <div id="mp-hub-room-summary" class="mp-hub-room-summary"></div>
+            <h4 class="mp-hub-main__subtitle">Players in room</h4>
             <table class="mp-room-directory__table">
               <thead>
                 <tr>
-                  <th>Code</th>
-                  <th>Players</th>
-                  <th>Status</th>
+                  <th>Player</th>
+                  <th>Presence</th>
+                  <th>Turn State</th>
+                  <th>Score</th>
+                  <th>Waiting</th>
                   <th></th>
                 </tr>
               </thead>
-              <tbody id="mp-room-directory-body"></tbody>
+              <tbody id="mp-hub-room-player-table-body"></tbody>
             </table>
-          </div>
-          <div class="mp-setup__buttons">
-            <button id="home-refresh-rooms" type="button">Refresh Rooms</button>
-            <button id="home-back-to-multiplayer" type="button">Back</button>
-          </div>
-        </section>
-        <section id="home-step-waitroom" class="mp-setup" style="display:none">
-          <h2>Room Waitroom</h2>
-          <label for="waitroom-name">Your Name</label>
-          <input id="waitroom-name" type="text" placeholder="Guest" />
-          <div class="mp-setup__buttons">
-            <button id="waitroom-update-name" type="button">Update Name</button>
-            <button id="waitroom-start-game" type="button">Start Game</button>
-            <button id="waitroom-cancel-room" type="button" class="button-destructive">Abandon Room</button>
-            <button id="waitroom-leave-room" type="button" class="button-destructive">Leave Room</button>
-          </div>
-          <p id="waitroom-status" class="mp-status-line">No room joined.</p>
-          <table class="mp-room-directory__table">
-            <thead>
-              <tr>
-                <th>Player</th>
-                <th>Status</th>
-                <th>Turn</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="waitroom-player-table-body"></tbody>
-          </table>
-        </section>
-        <button id="start-new-game" type="button" style="display:none">New Game</button>
-      </div>
+          </section>
+        </div>
+      </main>
     </section>
     <main id="app-shell" class="app" style="display: none">
       <section class="workspace">
@@ -169,7 +154,10 @@
         <section id="player-state-panel" class="player-state-panel" aria-label="Player status">
           <h3 id="player-state-title">Snapshot</h3>
           <div id="player-state-summary" class="player-state-summary"></div>
-          <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
+          <div class="player-state-panel__actions">
+            <button id="back-to-lobby" type="button">Go Back to Lobby</button>
+            <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
+          </div>
         </section>
         <div class="log-header">
           <h2>Action Log</h2>
@@ -189,7 +177,7 @@
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
-    <script src="src/adapters/web/multiplayerClient.js?v=20260215-4"></script>
+    <script src="src/adapters/web/multiplayerClient.js?v=20260215-5"></script>
     <script src="src/adapters/web/localStorageStateStore.js"></script>
     <script src="src/core/services/loggerService.js"></script>
     <script src="src/core/services/gameStateService.js"></script>
@@ -198,8 +186,7 @@
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
-    <script src="src/app/flows/soloFlow.js"></script>
-    <script src="src/app/flows/homeModeFlow.js?v=20260215-2"></script>
-    <script src="src/app/bootstrap.js?v=20260215-22"></script>
+    <script src="src/app/flows/homeModeFlow.js?v=20260215-14"></script>
+    <script src="src/app/bootstrap.js?v=20260215-47"></script>
   </body>
 </html>
