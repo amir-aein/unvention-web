@@ -11,6 +11,7 @@
   const MAX_UNDO_SNAPSHOTS = 20;
   const MAX_PERSISTED_UNDO_SNAPSHOTS = 6;
   const MAX_SNAPSHOT_LOG_ENTRIES = 80;
+  const DISPLAY_NAME_MAX_LENGTH = 24;
   const ROLL_SPINNER_MS = 1000;
   const ROLL_RESULT_HOLD_MS = 160;
   const loggerService = container.loggerService;
@@ -33,16 +34,31 @@
   const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
   const AUTH_UI_STORAGE_KEY = "unvention.auth.ui.v1";
   const ROOM_CITY_POOL = [
-    "London", "Paris", "Berlin", "Vienna", "Zurich", "Geneva", "Basel", "Milan", "Turin", "Bologna",
-    "Florence", "Rome", "Naples", "Barcelona", "Madrid", "Valencia", "Lisbon", "Porto", "Amsterdam", "Rotterdam",
-    "The Hague", "Utrecht", "Brussels", "Antwerp", "Leuven", "Ghent", "Copenhagen", "Stockholm", "Gothenburg", "Oslo",
-    "Helsinki", "Tallinn", "Riga", "Vilnius", "Warsaw", "Krakow", "Prague", "Brno", "Budapest", "Belgrade",
-    "Ljubljana", "Zagreb", "Athens", "Istanbul", "Ankara", "Bursa", "Sofia", "Bucharest", "Cluj", "Kyiv",
-    "Lviv", "Minsk", "Moscow", "Saint Petersburg", "Dublin", "Edinburgh", "Glasgow", "Manchester", "Birmingham", "Liverpool",
-    "Cambridge", "Oxford", "Bristol", "Bordeaux", "Lyon", "Grenoble", "Toulouse", "Marseille", "Munich", "Frankfurt",
-    "Hamburg", "Cologne", "Stuttgart", "Dresden", "Leipzig", "Nuremberg", "Hanover", "Eindhoven", "Maastricht", "Aarhus",
-    "Reykjavik", "Boston", "New York", "Philadelphia", "Chicago", "Pittsburgh", "Detroit", "San Francisco", "San Jose", "Seattle",
-    "Los Angeles", "Montreal", "Toronto", "Ottawa", "Vancouver", "Tokyo", "Osaka", "Kyoto", "Nagoya", "Seoul",
+    { city: "London", flag: "🇬🇧" }, { city: "Paris", flag: "🇫🇷" }, { city: "Berlin", flag: "🇩🇪" }, { city: "Vienna", flag: "🇦🇹" },
+    { city: "Zurich", flag: "🇨🇭" }, { city: "Geneva", flag: "🇨🇭" }, { city: "Basel", flag: "🇨🇭" }, { city: "Milan", flag: "🇮🇹" },
+    { city: "Turin", flag: "🇮🇹" }, { city: "Bologna", flag: "🇮🇹" }, { city: "Florence", flag: "🇮🇹" }, { city: "Rome", flag: "🇮🇹" },
+    { city: "Naples", flag: "🇮🇹" }, { city: "Barcelona", flag: "🇪🇸" }, { city: "Madrid", flag: "🇪🇸" }, { city: "Valencia", flag: "🇪🇸" },
+    { city: "Lisbon", flag: "🇵🇹" }, { city: "Porto", flag: "🇵🇹" }, { city: "Amsterdam", flag: "🇳🇱" }, { city: "Rotterdam", flag: "🇳🇱" },
+    { city: "The Hague", flag: "🇳🇱" }, { city: "Utrecht", flag: "🇳🇱" }, { city: "Brussels", flag: "🇧🇪" }, { city: "Antwerp", flag: "🇧🇪" },
+    { city: "Leuven", flag: "🇧🇪" }, { city: "Ghent", flag: "🇧🇪" }, { city: "Copenhagen", flag: "🇩🇰" }, { city: "Stockholm", flag: "🇸🇪" },
+    { city: "Gothenburg", flag: "🇸🇪" }, { city: "Oslo", flag: "🇳🇴" }, { city: "Helsinki", flag: "🇫🇮" }, { city: "Tallinn", flag: "🇪🇪" },
+    { city: "Riga", flag: "🇱🇻" }, { city: "Vilnius", flag: "🇱🇹" }, { city: "Warsaw", flag: "🇵🇱" }, { city: "Krakow", flag: "🇵🇱" },
+    { city: "Prague", flag: "🇨🇿" }, { city: "Brno", flag: "🇨🇿" }, { city: "Budapest", flag: "🇭🇺" }, { city: "Belgrade", flag: "🇷🇸" },
+    { city: "Ljubljana", flag: "🇸🇮" }, { city: "Zagreb", flag: "🇭🇷" }, { city: "Athens", flag: "🇬🇷" }, { city: "Istanbul", flag: "🇹🇷" },
+    { city: "Ankara", flag: "🇹🇷" }, { city: "Bursa", flag: "🇹🇷" }, { city: "Sofia", flag: "🇧🇬" }, { city: "Bucharest", flag: "🇷🇴" },
+    { city: "Cluj", flag: "🇷🇴" }, { city: "Kyiv", flag: "🇺🇦" }, { city: "Lviv", flag: "🇺🇦" }, { city: "Dublin", flag: "🇮🇪" },
+    { city: "Edinburgh", flag: "🇬🇧" }, { city: "Glasgow", flag: "🇬🇧" }, { city: "Manchester", flag: "🇬🇧" }, { city: "Birmingham", flag: "🇬🇧" },
+    { city: "Liverpool", flag: "🇬🇧" }, { city: "Cambridge", flag: "🇬🇧" }, { city: "Oxford", flag: "🇬🇧" }, { city: "Bristol", flag: "🇬🇧" },
+    { city: "Bordeaux", flag: "🇫🇷" }, { city: "Lyon", flag: "🇫🇷" }, { city: "Grenoble", flag: "🇫🇷" }, { city: "Toulouse", flag: "🇫🇷" },
+    { city: "Marseille", flag: "🇫🇷" }, { city: "Munich", flag: "🇩🇪" }, { city: "Frankfurt", flag: "🇩🇪" }, { city: "Hamburg", flag: "🇩🇪" },
+    { city: "Cologne", flag: "🇩🇪" }, { city: "Stuttgart", flag: "🇩🇪" }, { city: "Dresden", flag: "🇩🇪" }, { city: "Leipzig", flag: "🇩🇪" },
+    { city: "Nuremberg", flag: "🇩🇪" }, { city: "Hanover", flag: "🇩🇪" }, { city: "Eindhoven", flag: "🇳🇱" }, { city: "Maastricht", flag: "🇳🇱" },
+    { city: "Aarhus", flag: "🇩🇰" }, { city: "Reykjavik", flag: "🇮🇸" }, { city: "Boston", flag: "🇺🇸" }, { city: "New York", flag: "🇺🇸" },
+    { city: "Philadelphia", flag: "🇺🇸" }, { city: "Chicago", flag: "🇺🇸" }, { city: "Pittsburgh", flag: "🇺🇸" }, { city: "Detroit", flag: "🇺🇸" },
+    { city: "San Francisco", flag: "🇺🇸" }, { city: "San Jose", flag: "🇺🇸" }, { city: "Seattle", flag: "🇺🇸" }, { city: "Los Angeles", flag: "🇺🇸" },
+    { city: "Montreal", flag: "🇨🇦" }, { city: "Toronto", flag: "🇨🇦" }, { city: "Ottawa", flag: "🇨🇦" }, { city: "Vancouver", flag: "🇨🇦" },
+    { city: "Tokyo", flag: "🇯🇵" }, { city: "Osaka", flag: "🇯🇵" }, { city: "Kyoto", flag: "🇯🇵" }, { city: "Nagoya", flag: "🇯🇵" },
+    { city: "Seoul", flag: "🇰🇷" },
   ];
   const VARIABLE_SETUP_STEP_IDS_BY_OPTION = {
     order: ["workshop_layout_order"],
@@ -110,6 +126,7 @@
   let hubProfileError = "";
   let hubSelectedRoomCode = "";
   let gameSurfaceRoomCode = "";
+  let hubAutoRefreshTimer = null;
   let selectedVariableSetup = getDefaultVariableSetupSelection();
   let sectionPlayerViews = SECTION_VIEW_KEYS.reduce((accumulator, key) => {
     accumulator[key] = "";
@@ -305,6 +322,12 @@
       client: null,
       unsubscribe: null,
       profileSyncInFlight: false,
+      displayNameModalOpen: false,
+      displayNameModalSaving: false,
+      displayNameModalMode: "create",
+      displayNameModalFeedback: "",
+      displayNameModalFeedbackLevel: "info",
+      displayNameDraft: "",
     };
   }
 
@@ -345,8 +368,142 @@
     return Boolean(supabaseAuth.enabled && supabaseAuth.user);
   }
 
+  function sanitizeDisplayName(nameInput) {
+    return String(nameInput || "").trim().slice(0, DISPLAY_NAME_MAX_LENGTH);
+  }
+
+  function getAssignedDisplayName() {
+    return sanitizeDisplayName(supabaseAuth.profile?.display_name || "");
+  }
+
+  function getAuthProfileLegacyToken() {
+    return String(supabaseAuth.profile?.legacy_profile_token || "").trim();
+  }
+
+  function getLocalLegacyProfileToken() {
+    return String(multiplayerState.profileToken || "").trim();
+  }
+
+  function getLegacyProfileTokenForAuthPatch() {
+    const localToken = getLocalLegacyProfileToken();
+    const profileToken = getAuthProfileLegacyToken();
+    if (!localToken) {
+      return "";
+    }
+    if (!profileToken || profileToken === localToken) {
+      return localToken;
+    }
+    return "";
+  }
+
+  function isDisplayNameRequired() {
+    return isAuthenticated() && Boolean(supabaseAuth.profile) && !getAssignedDisplayName();
+  }
+
+  function canAccessMultiplayerFeature() {
+    if (!isAuthenticated()) {
+      return false;
+    }
+    if (isDisplayNameRequired()) {
+      openDisplayNameModal("create");
+      return false;
+    }
+    return true;
+  }
+
+  function getMultiplayerAccessError() {
+    if (!isAuthenticated()) {
+      return "Sign in required";
+    }
+    if (isDisplayNameRequired()) {
+      return "Set your display name to continue.";
+    }
+    return "";
+  }
+
+  function getPlayerSeatFallbackLabel(playerIdInput) {
+    const playerId = String(playerIdInput || "").trim().toUpperCase();
+    const match = /^P(\d+)$/.exec(playerId);
+    if (match) {
+      return "Player " + String(match[1]);
+    }
+    return playerId ? "Player " + playerId : "Player";
+  }
+
+  function openDisplayNameModal(modeInput) {
+    if (!isAuthenticated()) {
+      return;
+    }
+    const mode = String(modeInput || "create").toLowerCase() === "change" ? "change" : "create";
+    const wasOpen = Boolean(supabaseAuth.displayNameModalOpen);
+    const currentMode = String(supabaseAuth.displayNameModalMode || "create");
+    if (wasOpen && currentMode === mode && mode === "create") {
+      return;
+    }
+    supabaseAuth.displayNameModalOpen = true;
+    supabaseAuth.displayNameModalMode = mode;
+    supabaseAuth.displayNameModalFeedback = "";
+    supabaseAuth.displayNameModalFeedbackLevel = "info";
+    const fallbackName = mode === "create"
+      ? ""
+      : getAssignedDisplayName();
+    if (!wasOpen || mode === "change") {
+      supabaseAuth.displayNameDraft = sanitizeDisplayName(supabaseAuth.displayNameDraft || fallbackName);
+    }
+    renderMultiplayerUi();
+    if (typeof globalScope.setTimeout === "function") {
+      globalScope.setTimeout(() => {
+        if (typeof document === "undefined") {
+          return;
+        }
+        const input = document.getElementById("auth-display-name-input");
+        if (input && typeof input.focus === "function") {
+          input.focus();
+          if (typeof input.select === "function") {
+            input.select();
+          }
+        }
+      }, 0);
+    }
+  }
+
+  function closeDisplayNameModal() {
+    supabaseAuth.displayNameModalOpen = false;
+    supabaseAuth.displayNameModalSaving = false;
+    supabaseAuth.displayNameModalFeedback = "";
+    supabaseAuth.displayNameModalFeedbackLevel = "info";
+  }
+
+  function syncDisplayNameRequirement() {
+    if (!isAuthenticated()) {
+      closeDisplayNameModal();
+      supabaseAuth.displayNameDraft = "";
+      return;
+    }
+    if (!supabaseAuth.profile) {
+      return;
+    }
+    if (isDisplayNameRequired()) {
+      openDisplayNameModal("create");
+      return;
+    }
+    if (supabaseAuth.displayNameModalOpen && supabaseAuth.displayNameModalMode === "create") {
+      closeDisplayNameModal();
+      renderMultiplayerUi();
+    }
+    if (!supabaseAuth.displayNameDraft) {
+      supabaseAuth.displayNameDraft = getAssignedDisplayName();
+    }
+  }
+
   function requireAuthenticatedUser(messageInput) {
     if (isAuthenticated()) {
+      if (isDisplayNameRequired()) {
+        openDisplayNameModal("create");
+        multiplayerState.lastError = "Set your display name to continue.";
+        setAuthFeedback("Set your display name to continue.", "error");
+        return false;
+      }
       return true;
     }
     multiplayerState.lastError = String(messageInput || "Sign in required");
@@ -355,20 +512,11 @@
   }
 
   function getAuthDisplayNameFallback() {
-    const profileName = String(supabaseAuth.profile?.display_name || "").trim();
+    const profileName = getAssignedDisplayName();
     if (profileName) {
       return profileName;
     }
-    const rawMetaName = String(supabaseAuth.user?.user_metadata?.display_name || "").trim();
-    if (rawMetaName) {
-      return rawMetaName;
-    }
-    const email = String(supabaseAuth.user?.email || "").trim();
-    if (!email) {
-      return "";
-    }
-    const localPart = email.split("@")[0] || "";
-    return String(localPart || "").trim().slice(0, 24);
+    return "";
   }
 
   function setAuthFeedback(messageInput, levelInput) {
@@ -460,9 +608,15 @@
       persistAuthUiState();
       await refreshAuthProfile();
       queueAuthProfileSync("session");
+      await refreshPlayerHub(true);
     } else {
       supabaseAuth.statusMessage = supabaseAuth.enabled ? "Not signed in" : "Auth unavailable";
+      closeDisplayNameModal();
+      supabaseAuth.displayNameDraft = "";
+      roomDirectoryRows = [];
+      stopHubAutoRefresh();
     }
+    syncDisplayNameRequirement();
     renderMultiplayerUi();
     renderState();
   }
@@ -481,11 +635,12 @@
       return;
     }
     supabaseAuth.profile = data || null;
-    const profileName = String(supabaseAuth.profile?.display_name || "").trim();
-    if (profileName) {
-      multiplayerState.name = profileName;
-      persistMultiplayerState();
-    }
+    const profileName = getAssignedDisplayName();
+    const profileLegacyToken = getAuthProfileLegacyToken();
+    multiplayerState.name = profileName || "";
+    multiplayerState.profileToken = profileLegacyToken || "";
+    persistMultiplayerState();
+    syncDisplayNameRequirement();
   }
 
   function queueAuthProfileSync(reasonInput) {
@@ -507,19 +662,31 @@
     }
     supabaseAuth.profileSyncInFlight = true;
     try {
-      const displayName = String(getAuthDisplayNameFallback() || getDefaultPlayerName() || "Player").slice(0, 24);
-      const legacyProfileToken = String(multiplayerState.profileToken || "").trim() || null;
+      const legacyProfileToken = getLegacyProfileTokenForAuthPatch();
       const patch = {
-        display_name: displayName,
         last_seen_at: new Date().toISOString(),
       };
       if (legacyProfileToken) {
         patch.legacy_profile_token = legacyProfileToken;
       }
-      const { error } = await supabaseAuth.client
+      let { error } = await supabaseAuth.client
         .from("app_users")
         .update(patch)
         .eq("user_id", String(supabaseAuth.user.id));
+      if (
+        error &&
+        String(error.code || "") === "23505" &&
+        /legacy_profile_token/i.test(String(error.message || ""))
+      ) {
+        delete patch.legacy_profile_token;
+        multiplayerState.profileToken = "";
+        persistMultiplayerState();
+        const retry = await supabaseAuth.client
+          .from("app_users")
+          .update(patch)
+          .eq("user_id", String(supabaseAuth.user.id));
+        error = retry.error || null;
+      }
       if (error) {
         setAuthFeedback(
           "Profile sync failed (" + String(reasonInput || "update") + "): " + String(error.message || "unknown_error"),
@@ -532,6 +699,85 @@
       supabaseAuth.profileSyncInFlight = false;
       renderMultiplayerUi();
     }
+  }
+
+  async function saveAuthDisplayName(nameInput) {
+    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+      return false;
+    }
+    const nextDisplayName = sanitizeDisplayName(nameInput);
+    if (!nextDisplayName) {
+      supabaseAuth.displayNameModalFeedback = "Please enter a display name.";
+      supabaseAuth.displayNameModalFeedbackLevel = "error";
+      renderMultiplayerUi();
+      return false;
+    }
+    supabaseAuth.displayNameModalSaving = true;
+    supabaseAuth.displayNameModalFeedback = "";
+    renderMultiplayerUi();
+    const legacyProfileToken = getLegacyProfileTokenForAuthPatch();
+    const patch = {
+      display_name: nextDisplayName,
+      last_seen_at: new Date().toISOString(),
+    };
+    if (legacyProfileToken) {
+      patch.legacy_profile_token = legacyProfileToken;
+    }
+    let { error } = await supabaseAuth.client
+      .from("app_users")
+      .update(patch)
+      .eq("user_id", String(supabaseAuth.user.id));
+    if (
+      error &&
+      String(error.code || "") === "23505" &&
+      /legacy_profile_token/i.test(String(error.message || ""))
+    ) {
+      delete patch.legacy_profile_token;
+      multiplayerState.profileToken = "";
+      persistMultiplayerState();
+      const retry = await supabaseAuth.client
+        .from("app_users")
+        .update(patch)
+        .eq("user_id", String(supabaseAuth.user.id));
+      error = retry.error || null;
+    }
+    if (error) {
+      supabaseAuth.displayNameModalSaving = false;
+      supabaseAuth.displayNameModalFeedback = "Could not save name: " + String(error.message || "unknown_error");
+      supabaseAuth.displayNameModalFeedbackLevel = "error";
+      renderMultiplayerUi();
+      return false;
+    }
+    supabaseAuth.profile = {
+      ...(supabaseAuth.profile && typeof supabaseAuth.profile === "object" ? supabaseAuth.profile : {}),
+      user_id: String(supabaseAuth.user.id),
+      email: String(supabaseAuth.user.email || supabaseAuth.profile?.email || ""),
+      display_name: nextDisplayName,
+      legacy_profile_token: legacyProfileToken || null,
+      last_seen_at: patch.last_seen_at,
+    };
+    multiplayerState.name = nextDisplayName;
+    persistMultiplayerState();
+    closeDisplayNameModal();
+    supabaseAuth.displayNameDraft = nextDisplayName;
+    queueAuthProfileSync("display_name_saved");
+    renderMultiplayerUi();
+    renderState();
+    if (hasActiveMultiplayerRoom()) {
+      await sendMultiplayerCommand("rename_player", { name: nextDisplayName }, {
+        errorMessage: "Could not update room display name.",
+      });
+    }
+    return true;
+  }
+
+  async function submitDisplayNameModal() {
+    const input = typeof document !== "undefined"
+      ? document.getElementById("auth-display-name-input")
+      : null;
+    const candidate = sanitizeDisplayName(input ? input.value : supabaseAuth.displayNameDraft);
+    supabaseAuth.displayNameDraft = candidate;
+    await saveAuthDisplayName(candidate);
   }
 
   async function sendAuthMagicLink() {
@@ -577,6 +823,8 @@
     supabaseAuth.user = null;
     supabaseAuth.profile = null;
     supabaseAuth.statusMessage = "Signed out";
+    closeDisplayNameModal();
+    supabaseAuth.displayNameDraft = "";
     resetMultiplayerForHomeAction({ preserveHomeStep: true, preserveRoomSessions: false });
     multiplayerState.profileId = "";
     multiplayerState.profileToken = "";
@@ -599,8 +847,12 @@
     const loginFeedbackLine = document.getElementById("auth-login-feedback-line");
     const emailInput = document.getElementById("auth-login-email-input");
     const sendButton = document.getElementById("auth-send-link");
+    const homeDisplayNameRow = document.getElementById("auth-home-display-name-row");
+    const homeDisplayNameLine = document.getElementById("auth-home-display-name-line");
+    const changeDisplayNameButton = document.getElementById("auth-change-display-name");
     const homeStatusLine = document.getElementById("auth-home-status-line");
     const logoutButton = document.getElementById("auth-logout");
+    const assignedDisplayName = getAssignedDisplayName();
     const statusText = String(
       supabaseAuth.loading
         ? "Checking authentication..."
@@ -618,6 +870,18 @@
         ? "Logged in as " + String(supabaseAuth.user?.email || "user")
         : "Not signed in";
     }
+    if (homeDisplayNameRow && homeDisplayNameRow.style) {
+      homeDisplayNameRow.style.display = isAuthenticated() ? "flex" : "none";
+    }
+    if (homeDisplayNameLine) {
+      homeDisplayNameLine.textContent = isAuthenticated()
+        ? "Display name: " + (assignedDisplayName || "Not set")
+        : "Display name: Not set";
+    }
+    if (changeDisplayNameButton) {
+      changeDisplayNameButton.textContent = assignedDisplayName ? "Change" : "Set";
+      changeDisplayNameButton.disabled = !isAuthenticated() || supabaseAuth.loading || supabaseAuth.displayNameModalSaving;
+    }
     if (emailInput) {
       if (String(emailInput.value || "") !== String(supabaseAuth.email || "")) {
         emailInput.value = String(supabaseAuth.email || "");
@@ -631,6 +895,38 @@
     if (logoutButton) {
       logoutButton.disabled = !supabaseAuth.enabled || supabaseAuth.loading || !isAuthenticated();
     }
+    renderDisplayNameModal();
+  }
+
+  function renderDisplayNameModal() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const modal = document.getElementById("auth-display-name-modal");
+    const title = document.getElementById("auth-display-name-modal-title");
+    const input = document.getElementById("auth-display-name-input");
+    const saveButton = document.getElementById("auth-display-name-save");
+    const feedbackLine = document.getElementById("auth-display-name-feedback");
+    if (!modal || !title || !input || !saveButton || !feedbackLine) {
+      return;
+    }
+    const shouldShow = Boolean(supabaseAuth.displayNameModalOpen && isAuthenticated());
+    modal.style.display = shouldShow ? "flex" : "none";
+    if (!shouldShow) {
+      return;
+    }
+    const isCreateMode = String(supabaseAuth.displayNameModalMode || "create") !== "change";
+    title.textContent = isCreateMode ? "Set your display name" : "Change your display name";
+    if (String(input.value || "") !== String(supabaseAuth.displayNameDraft || "")) {
+      input.value = String(supabaseAuth.displayNameDraft || "");
+    }
+    const normalizedValue = sanitizeDisplayName(input.value);
+    const disabled = supabaseAuth.displayNameModalSaving || !normalizedValue;
+    input.disabled = Boolean(supabaseAuth.displayNameModalSaving);
+    saveButton.disabled = disabled;
+    saveButton.textContent = supabaseAuth.displayNameModalSaving ? "Saving..." : "Save";
+    feedbackLine.textContent = String(supabaseAuth.displayNameModalFeedback || "");
+    feedbackLine.style.color = supabaseAuth.displayNameModalFeedbackLevel === "error" ? "#b91c1c" : "";
   }
 
   function bindAuthControls() {
@@ -664,16 +960,44 @@
         logoutAuth();
       });
     }
+    const changeDisplayNameButton = document.getElementById("auth-change-display-name");
+    if (changeDisplayNameButton && typeof changeDisplayNameButton.addEventListener === "function") {
+      changeDisplayNameButton.addEventListener("click", function onChangeDisplayNameClick() {
+        openDisplayNameModal("change");
+      });
+    }
+    const displayNameInput = document.getElementById("auth-display-name-input");
+    if (displayNameInput && typeof displayNameInput.addEventListener === "function") {
+      displayNameInput.addEventListener("input", function onDisplayNameInput() {
+        supabaseAuth.displayNameDraft = sanitizeDisplayName(displayNameInput.value);
+        supabaseAuth.displayNameModalFeedback = "";
+        supabaseAuth.displayNameModalFeedbackLevel = "info";
+        renderMultiplayerUi();
+      });
+      displayNameInput.addEventListener("keydown", function onDisplayNameKeydown(event) {
+        if (String(event?.key || "").toLowerCase() !== "enter") {
+          return;
+        }
+        event.preventDefault();
+        submitDisplayNameModal();
+      });
+    }
+    const displayNameSaveButton = document.getElementById("auth-display-name-save");
+    if (displayNameSaveButton && typeof displayNameSaveButton.addEventListener === "function") {
+      displayNameSaveButton.addEventListener("click", function onDisplayNameSaveClick() {
+        submitDisplayNameModal();
+      });
+    }
   }
 
-  function getRoomCityName(roomCodeInput) {
+  function getRoomCityInfo(roomCodeInput) {
     const roomCode = normalizeRoomCode(roomCodeInput);
     if (!roomCode) {
-      return "Workshop";
+      return { city: "Workshop", flag: "🏳️" };
     }
     const poolSize = ROOM_CITY_POOL.length;
     if (poolSize <= 0) {
-      return "Workshop";
+      return { city: "Workshop", flag: "🏳️" };
     }
     let hash = 2166136261;
     for (let index = 0; index < roomCode.length; index += 1) {
@@ -681,15 +1005,20 @@
       hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
     }
     const normalizedHash = (hash >>> 0);
-    return String(ROOM_CITY_POOL[normalizedHash % poolSize] || "Workshop");
+    const candidate = ROOM_CITY_POOL[normalizedHash % poolSize] || {};
+    return {
+      city: String(candidate.city || "Workshop"),
+      flag: String(candidate.flag || "🏳️"),
+    };
   }
 
   function formatRoomDisplayName(roomCodeInput) {
     const roomCode = normalizeRoomCode(roomCodeInput);
     if (!roomCode) {
-      return "Workshop";
+      return "🏳️ Workshop";
     }
-    return getRoomCityName(roomCode) + " " + roomCode;
+    const cityInfo = getRoomCityInfo(roomCode);
+    return cityInfo.flag + " " + cityInfo.city + " (" + roomCode + ")";
   }
 
   function loadMultiplayerState() {
@@ -1282,6 +1611,59 @@
     }
   }
 
+  function stopHubAutoRefresh() {
+    if (hubAutoRefreshTimer && typeof globalScope.clearInterval === "function") {
+      globalScope.clearInterval(hubAutoRefreshTimer);
+    }
+    hubAutoRefreshTimer = null;
+  }
+
+  function ensureHubAutoRefresh() {
+    if (typeof window === "undefined" || globalScope !== window) {
+      return;
+    }
+    if (hubAutoRefreshTimer || typeof globalScope.setInterval !== "function") {
+      return;
+    }
+    hubAutoRefreshTimer = globalScope.setInterval(() => {
+      if (!isAuthenticated() || hasActiveMultiplayerRoom()) {
+        return;
+      }
+      refreshPlayerHub(false);
+    }, 5000);
+  }
+
+  function pruneStaleRoomSessions(optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const authoritative = Boolean(options.authoritative);
+    const authoritativeActiveCodes = new Set(
+      Array.isArray(options.activeRoomCodes)
+        ? options.activeRoomCodes.map((code) => normalizeRoomCode(code)).filter(Boolean)
+        : [],
+    );
+    const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
+    const sessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
+    let changed = false;
+    Object.keys(sessions).forEach((roomCode) => {
+      const normalizedCode = normalizeRoomCode(roomCode);
+      const session = sessions[roomCode] || {};
+      const status = String(session.lastKnownStatus || "").trim().toLowerCase();
+      const keepByStatus = isActiveRoomStatus(status);
+      const keepByCurrentRoom = Boolean(currentRoomCode && normalizedCode === currentRoomCode);
+      const keepByAuthoritative = authoritative && authoritativeActiveCodes.has(normalizedCode);
+      if (keepByCurrentRoom || keepByAuthoritative || (!authoritative && keepByStatus)) {
+        return;
+      }
+      delete sessions[roomCode];
+      changed = true;
+    });
+    if (!changed) {
+      return;
+    }
+    multiplayerState.roomSessionsByCode = sessions;
+    persistMultiplayerState();
+  }
+
   async function resetProfileRoomsOnServer(profileTokenInput) {
     const profileToken = String(profileTokenInput || "").trim();
     if (!profileToken || typeof fetch !== "function") {
@@ -1392,6 +1774,32 @@
     return { key: "pending-start", label: "Pending start" };
   }
 
+  function isRoomHostedByCurrentPlayer(roomInput) {
+    const room = roomInput && typeof roomInput === "object" ? roomInput : {};
+    const hostPlayerId = String(room.hostPlayerId || "");
+    const myPlayerId = String(room.myPlayerId || "");
+    return Boolean(hostPlayerId && myPlayerId && hostPlayerId === myPlayerId);
+  }
+
+  function getHubRoomSortPriority(roomInput) {
+    const room = roomInput && typeof roomInput === "object" ? roomInput : {};
+    const primary = resolveSidebarStatusPill(room);
+    const hosting = isRoomHostedByCurrentPlayer(room);
+    if (hosting && primary.key === "pending-start") {
+      return 0;
+    }
+    if (primary.key === "waiting-you") {
+      return 1;
+    }
+    if (primary.key === "waiting-others" || primary.key === "pending-start") {
+      return 2;
+    }
+    if (primary.key === "finished") {
+      return 3;
+    }
+    return 4;
+  }
+
   function createHubRoomList() {
     const roomsByCode = new Map();
     const upsertRoom = (roomCodeInput, patchInput) => {
@@ -1451,44 +1859,45 @@
     };
 
     const knownSessions = normalizeRoomSessionMap(multiplayerState.roomSessionsByCode);
-    Object.keys(knownSessions).forEach((roomCode) => {
-      const session = knownSessions[roomCode];
-      upsertRoom(roomCode, {
-        status: String(session?.lastKnownStatus || "unknown"),
-        inProfileRecent: true,
-        hasReconnectSession: true,
-        myPlayerId: String(session?.playerId || ""),
-        myPlayerName: toPlayerSeatLabel(session?.playerId || ""),
-        activityAt: Number(session?.updatedAt || 0),
-        createdAt: Number(session?.updatedAt || 0),
-      });
-    });
+    const getKnownSession = (roomCodeInput) => {
+      const roomCode = normalizeRoomCode(roomCodeInput);
+      if (!roomCode) {
+        return null;
+      }
+      return knownSessions[roomCode] || null;
+    };
 
     const activeRooms = Array.isArray(hubProfileSummary?.activeRooms) ? hubProfileSummary.activeRooms : [];
     activeRooms.forEach((room) => {
+      const knownSession = getKnownSession(room?.roomCode);
       const playerId = String(room?.playerId || "");
+      const playerName = sanitizeDisplayName(room?.playerName || "");
       upsertRoom(room?.roomCode, {
         status: String(room?.roomStatus || "in_game"),
         inProfileActive: true,
+        hasReconnectSession: Boolean(knownSession?.reconnectToken),
         connected: Object.prototype.hasOwnProperty.call(room || {}, "connected")
           ? Boolean(room.connected)
           : null,
         myEndedTurn: typeof room?.endedTurn === "boolean" ? Boolean(room.endedTurn) : null,
-        myPlayerId: playerId,
-        myPlayerName: toPlayerSeatLabel(playerId),
-        activityAt: Number(room?.updatedAt || room?.joinedAt || 0),
+        myPlayerId: playerId || String(knownSession?.playerId || ""),
+        myPlayerName: playerName || toPlayerSeatLabel(playerId || String(knownSession?.playerId || "")),
+        activityAt: Number(room?.updatedAt || room?.joinedAt || knownSession?.updatedAt || 0),
       });
     });
 
     const directoryRooms = Array.isArray(roomDirectoryRows) ? roomDirectoryRows : [];
     directoryRooms.forEach((room) => {
+      const knownSession = getKnownSession(room?.code);
       const hostPlayerId = String(room?.hostPlayerId || "");
+      const hostName = sanitizeDisplayName(room?.hostName || "");
       upsertRoom(room?.code, {
         status: String(room?.status || "unknown"),
         playerCount: Number.isFinite(Number(room?.playerCount)) ? Number(room.playerCount) : null,
         maxPlayers: Number.isFinite(Number(room?.maxPlayers)) ? Number(room.maxPlayers) : null,
         hostPlayerId,
-        hostName: hostPlayerId ? toPlayerSeatLabel(hostPlayerId) : "",
+        hostName: hostName || (hostPlayerId ? toPlayerSeatLabel(hostPlayerId) : ""),
+        hasReconnectSession: Boolean(knownSession?.reconnectToken),
         joinable: Boolean(room?.joinable),
         listed: true,
         activityAt: Number(room?.updatedAt || 0),
@@ -1496,32 +1905,17 @@
       });
     });
 
-    const recentRooms = Array.isArray(hubProfileSummary?.recentRooms) ? hubProfileSummary.recentRooms : [];
-    recentRooms.forEach((room) => {
-      const playerId = String(room?.playerId || "");
-      upsertRoom(room?.roomCode, {
-        status: String(room?.roomStatus || "unknown"),
-        inProfileRecent: true,
-        connected: Object.prototype.hasOwnProperty.call(room || {}, "connected")
-          ? Boolean(room.connected)
-          : null,
-        myPlayerId: playerId,
-        myPlayerName: toPlayerSeatLabel(playerId),
-        removedByAction: String(room?.removedByAction || ""),
-        activityAt: Number(room?.lastSeenAt || room?.joinedAt || 0),
-        createdAt: Number(room?.joinedAt || 0),
-      });
-    });
-
     if (multiplayerState.room && multiplayerState.room.code) {
       const room = multiplayerState.room;
       const players = Array.isArray(room.players) ? room.players : [];
+      const hostPlayer = players.find((player) => String(player?.playerId || "") === String(room.hostPlayerId || ""));
+      const myPlayer = players.find((player) => String(player?.playerId || "") === String(multiplayerState.playerId || ""));
       upsertRoom(room.code, {
         status: String(room.status || "unknown"),
         playerCount: players.length,
         maxPlayers: Number.isFinite(Number(room.maxPlayers)) ? Number(room.maxPlayers) : null,
         hostPlayerId: String(room.hostPlayerId || ""),
-        hostName: toPlayerSeatLabel(room.hostPlayerId),
+        hostName: sanitizeDisplayName(hostPlayer?.name || "") || toPlayerSeatLabel(room.hostPlayerId),
         currentJoined: true,
         joinable: String(room.status || "").toLowerCase() === "lobby",
         hasReconnectSession: Boolean(multiplayerState.reconnectToken),
@@ -1531,7 +1925,7 @@
           return me ? Boolean(me.endedTurn) : null;
         })(),
         myPlayerId: String(multiplayerState.playerId || ""),
-        myPlayerName: toPlayerSeatLabel(multiplayerState.playerId),
+        myPlayerName: sanitizeDisplayName(myPlayer?.name || "") || toPlayerSeatLabel(multiplayerState.playerId),
         activityAt: Number(room.updatedAt || Date.now()),
         createdAt: Number(room.createdAt || 0),
       });
@@ -1540,18 +1934,16 @@
     const list = Array.from(roomsByCode.values()).map((room) => {
       const status = String(room.status || "unknown").toLowerCase();
       const profileKnown = Boolean(room.inProfileActive || room.inProfileRecent || room.currentJoined);
-      const sortGroup = room.currentJoined
-        ? 0
-        : isActiveRoomStatus(status)
-          ? 1
-          : isFinishedRoomStatus(status)
-            ? 2
-            : 3;
+      const sortGroup = getHubRoomSortPriority({
+        ...room,
+        status,
+      });
       return {
         ...room,
         status,
         profileKnown,
         sortGroup,
+        isHosting: isRoomHostedByCurrentPlayer(room),
       };
     });
     list.sort((a, b) => {
@@ -1653,9 +2045,58 @@
       refreshRoomDirectory(force),
       refreshHubProfileSummary(force),
     ]);
+    pruneStaleRoomSessions({
+      authoritative: Boolean(hubProfileSummary && !hubProfileError),
+      activeRoomCodes: Array.isArray(hubProfileSummary?.activeRooms)
+        ? hubProfileSummary.activeRooms.map((room) => room?.roomCode)
+        : [],
+    });
     const rooms = createHubRoomList();
     ensureHubSelection(rooms);
     renderMultiplayerUi();
+  }
+
+  function animateHubRoomListReorder(containerInput, previousTopByCodeInput) {
+    const container = containerInput || null;
+    const previousTopByCode = previousTopByCodeInput instanceof Map
+      ? previousTopByCodeInput
+      : new Map();
+    if (!container || previousTopByCode.size === 0) {
+      return;
+    }
+    const nodes = Array.from(container.querySelectorAll("a[data-room-code]"));
+    const moves = [];
+    nodes.forEach((node) => {
+      const roomCode = normalizeRoomCode(node.getAttribute("data-room-code") || "");
+      if (!roomCode || !previousTopByCode.has(roomCode)) {
+        return;
+      }
+      const previousTop = Number(previousTopByCode.get(roomCode));
+      const nextTop = Number(node.getBoundingClientRect().top);
+      const deltaY = previousTop - nextTop;
+      if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) {
+        return;
+      }
+      moves.push({ node, deltaY });
+    });
+    if (moves.length === 0) {
+      return;
+    }
+    moves.forEach((move) => {
+      move.node.style.transition = "none";
+      move.node.style.transform = "translateY(" + String(move.deltaY) + "px)";
+    });
+    const play = () => {
+      moves.forEach((move) => {
+        move.node.style.transition = "transform 240ms ease";
+        move.node.style.transform = "";
+      });
+    };
+    if (typeof globalScope.requestAnimationFrame === "function") {
+      globalScope.requestAnimationFrame(play);
+      return;
+    }
+    play();
   }
 
   function renderHubUi() {
@@ -1725,8 +2166,10 @@
         const isSelected = room.roomCode === selectedCode;
         const code = escapeHtml(room.roomCode);
         const roomDisplayName = escapeHtml(formatRoomDisplayName(room.roomCode));
-        const status = escapeHtml(toRoomStatusLabel(room.status));
-        const pill = resolveSidebarStatusPill(room);
+        const primaryPill = resolveSidebarStatusPill(room);
+        const hostingPill = room.isHosting
+          ? "<span class='mp-room-status-pill mp-room-status-pill--hosting'>Hosting</span>"
+          : "";
         const players = room.playerCount === null || room.maxPlayers === null
           ? "-"
           : String(room.playerCount) + "/" + String(room.maxPlayers);
@@ -1738,19 +2181,29 @@
           "' data-action='hub-select-room' data-room-code='" + code + "'>" +
           "<span class='mp-hub-room-item__title'>" + roomDisplayName + "</span>" +
           "<span class='mp-hub-room-item__line'>" +
-          "<span class='mp-hub-room-item__meta'>" + status + " | " + escapeHtml(players) + "</span>" +
-          "<span class='mp-room-status-pill mp-room-status-pill--" + escapeHtml(pill.key) + "'>" + escapeHtml(pill.label) + "</span>" +
+          "<span class='mp-hub-room-item__meta'>" + escapeHtml(players) + " players</span>" +
+          "<span class='mp-hub-room-item__pill-row'>" +
+          "<span class='mp-room-status-pill mp-room-status-pill--" + escapeHtml(primaryPill.key) + "'>" + escapeHtml(primaryPill.label) + "</span>" +
+          hostingPill +
+          "</span>" +
           "</span>" +
           "<span class='mp-hub-room-item__meta'>" + updatedAt + "</span>" +
           "</a>";
       }).join("");
     };
 
+    const previousTopByCode = new Map();
+    Array.from(roomListNode.querySelectorAll("a[data-room-code]")).forEach((node) => {
+      const roomCode = normalizeRoomCode(node.getAttribute("data-room-code") || "");
+      if (!roomCode) {
+        return;
+      }
+      previousTopByCode.set(roomCode, Number(node.getBoundingClientRect().top));
+    });
     roomListNode.innerHTML = renderRoomButtons(
-      rooms.filter((room) => {
-        return room.currentJoined || room.inProfileActive || room.inProfileRecent;
-      }),
+      rooms.filter((room) => room.currentJoined || room.inProfileActive),
     );
+    animateHubRoomListReorder(roomListNode, previousTopByCode);
 
     if (!selectedRoom) {
       roomTitleNode.textContent = "Select a room";
@@ -1772,6 +2225,9 @@
     const summaryPlayerCount = selectedRoom.playerCount;
     const summaryMaxPlayers = selectedRoom.maxPlayers;
     const summaryHostPlayerId = String(selectedRoom.hostPlayerId || "");
+    const summaryHostLabel = sanitizeDisplayName(selectedRoom.hostName || "") || toPlayerSeatLabel(summaryHostPlayerId);
+    const summaryMyLabel = sanitizeDisplayName(selectedRoom.myPlayerName || "") ||
+      (selectedRoom.myPlayerId ? toPlayerSeatLabel(selectedRoom.myPlayerId) : "-");
 
     roomTitleNode.textContent = "Room " + formatRoomDisplayName(selectedRoom.roomCode);
     roomMetaNode.textContent =
@@ -1799,10 +2255,10 @@
       ) +
       "</span></div>" +
       "<div class='mp-hub-room-summary__row'><strong>Host</strong><span>" +
-      escapeHtml(toPlayerSeatLabel(summaryHostPlayerId) || "Unknown") +
+      escapeHtml(summaryHostLabel || "Unknown") +
       "</span></div>" +
       "<div class='mp-hub-room-summary__row'><strong>Your seat</strong><span>" +
-      escapeHtml(selectedRoom.myPlayerId ? toPlayerSeatLabel(selectedRoom.myPlayerId) : "-") +
+      escapeHtml(summaryMyLabel) +
       "</span></div>" +
       "<div class='mp-hub-room-summary__row'><strong>Turn</strong><span>" +
       escapeHtml(
@@ -1990,6 +2446,10 @@
   }
 
   async function runSelectedHubPrimaryAction() {
+    if (isDisplayNameRequired()) {
+      openDisplayNameModal("create");
+      return;
+    }
     const rooms = createHubRoomList();
     const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
     const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
@@ -2036,6 +2496,10 @@
   }
 
   async function openSelectedHubRoom() {
+    if (isDisplayNameRequired()) {
+      openDisplayNameModal("create");
+      return false;
+    }
     const rooms = createHubRoomList();
     const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
     const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
@@ -2137,6 +2601,10 @@
   }
 
   async function abandonSelectedHubRoom() {
+    if (isDisplayNameRequired()) {
+      openDisplayNameModal("create");
+      return;
+    }
     const rooms = createHubRoomList();
     const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
     const selectedRoom = rooms.find((room) => room.roomCode === selectedCode) || null;
@@ -2213,7 +2681,7 @@
         const hostTag = player.playerId === room?.hostPlayerId ? " [host]" : "";
         const onlineTag = player.connected ? "online" : "offline";
         const turnTag = player.endedTurn ? "ended" : "playing";
-        return "<li>" + String(player.playerId) + meTag + hostTag + " - " + toPlayerSeatLabel(player.playerId) + " - " + onlineTag + " - " + turnTag + "</li>";
+        return "<li>" + toPlayerSeatLabel(player.playerId) + meTag + hostTag + " - " + onlineTag + " - " + turnTag + "</li>";
       })
       .join("");
     if (playerList) {
@@ -2413,12 +2881,14 @@
       multiplayerState.room.hostPlayerId === multiplayerState.playerId);
   }
 
-  function resolvePlayerName(playerIdInput) {
+  function resolvePlayerName(playerIdInput, optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const preferYou = options.preferYou !== false;
     const playerId = String(playerIdInput || "").trim();
     if (!playerId) {
       return "";
     }
-    if (!hasActiveMultiplayerRoom() && (playerId === "P1" || playerId === String(activePlayerId || ""))) {
+    if (preferYou && !hasActiveMultiplayerRoom() && (playerId === "P1" || playerId === String(activePlayerId || ""))) {
       return "You";
     }
     const roomPlayers = Array.isArray(multiplayerState.room?.players) ? multiplayerState.room.players : [];
@@ -2426,16 +2896,17 @@
     if (match && String(match.name || "").trim()) {
       return String(match.name || "").trim();
     }
-    return playerId;
+    if (String(multiplayerState.playerId || "") === playerId) {
+      const localName = sanitizeDisplayName(multiplayerState.name || getAssignedDisplayName());
+      if (localName) {
+        return localName;
+      }
+    }
+    return getPlayerSeatFallbackLabel(playerId);
   }
 
   function toPlayerSeatLabel(playerIdInput) {
-    const playerId = String(playerIdInput || "").trim().toUpperCase();
-    const match = /^P(\d+)$/.exec(playerId);
-    if (match) {
-      return "Player " + String(match[1]);
-    }
-    return playerId ? "Player " + playerId : "Player";
+    return resolvePlayerName(playerIdInput, { preferYou: false });
   }
 
   function getDefaultPlayerName() {
@@ -3220,12 +3691,16 @@
       const knownReconnectToken = String(
         multiplayerState.reconnectToken || getReconnectTokenForRoom(multiplayerState.room?.code || ""),
       );
-      if (multiplayerState.room?.code && knownReconnectToken) {
+      const resolvedRoomCode = normalizeRoomCode(multiplayerState.room?.code || "");
+      const resolvedRoomStatus = String(multiplayerState.room?.status || "").toLowerCase();
+      if (resolvedRoomCode && knownReconnectToken && isActiveRoomStatus(resolvedRoomStatus)) {
         upsertRoomSession(multiplayerState.room.code, {
           playerId: multiplayerState.playerId,
           reconnectToken: knownReconnectToken,
           lastKnownStatus: String(multiplayerState.room.status || "unknown"),
         });
+      } else if (resolvedRoomCode && !isActiveRoomStatus(resolvedRoomStatus)) {
+        removeRoomSession(resolvedRoomCode);
       }
       const incomingLiveState = message?.you?.liveState && typeof message.you.liveState === "object"
         ? message.you.liveState
@@ -3363,6 +3838,7 @@
     const appShell = document.getElementById("app-shell");
     const footer = document.getElementById("action-footer");
     if (!isAuthenticated()) {
+      stopHubAutoRefresh();
       if (authGateScreen && authGateScreen.style) {
         authGateScreen.style.display = "flex";
       }
@@ -3380,6 +3856,7 @@
     if (authGateScreen && authGateScreen.style) {
       authGateScreen.style.display = "none";
     }
+    ensureHubAutoRefresh();
     const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
     const isMultiplayerSurface = hasActiveMultiplayerRoom()
       ? currentRoomCode && currentRoomCode === normalizeRoomCode(gameSurfaceRoomCode)
@@ -4752,12 +5229,13 @@
       const wrenches = player ? computeAvailableWrenchesFromSnapshot(player) : null;
       const tools = player && Array.isArray(player.unlockedTools) ? player.unlockedTools.length : null;
       const isOnline = roomPlayer ? Boolean(roomPlayer.connected) : true;
-      const nameLabel = playerId === String(activePlayerId || "")
-        ? "You"
-        : (resolvePlayerName(playerId) || playerId);
+      const nameLabel = resolvePlayerName(playerId, { preferYou: false }) || playerId;
+      const playerLabel = playerId === String(activePlayerId || "")
+        ? nameLabel + " (you)"
+        : nameLabel;
       return (
         "<tr>" +
-        "<td><span class='player-name-cell'><span class='player-presence-dot " + (isOnline ? "player-presence-dot--online" : "player-presence-dot--offline") + "'></span>" + escapeHtml(nameLabel) + "</span></td>" +
+        "<td><span class='player-name-cell'><span class='player-presence-dot " + (isOnline ? "player-presence-dot--online" : "player-presence-dot--offline") + "'></span>" + escapeHtml(playerLabel) + "</span></td>" +
         "<td>" + (totalScore === null ? "-" : String(totalScore)) + "</td>" +
         "<td>" + (completedJournals === null ? "-" : String(completedJournals) + "/3") + "</td>" +
         "<td>" + (wrenches === null ? "-" : String(wrenches)) + "</td>" +
@@ -5857,7 +6335,8 @@
         resetLocalMultiplayerMemory,
         setHomeStep,
         getDefaultPlayerName,
-        canAccessMultiplayer: isAuthenticated,
+        canAccessMultiplayer: canAccessMultiplayerFeature,
+        getMultiplayerAccessError,
         getVariableSetupSelection,
         setVariableSetupSelection,
         persistHomeUiState,
@@ -5927,8 +6406,9 @@
       if (!playerId) {
         return;
       }
+      const playerLabel = resolvePlayerName(playerId, { preferYou: false }) || playerId;
       const confirmed = typeof globalScope.confirm === "function"
-        ? globalScope.confirm("Kick player " + playerId + " from room?")
+        ? globalScope.confirm("Kick " + playerLabel + " from room?")
         : true;
       if (!confirmed) {
         return;

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260216-48" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260216-50" />
   </head>
   <body>
     <section id="auth-gate-screen" class="auth-gate-screen" aria-label="Sign in">
@@ -23,6 +23,10 @@
         <h1 class="home-sidebar__title">UNVENTION</h1>
         <p id="mp-connection-status" class="mp-status-line">Offline</p>
         <section id="home-auth-panel" class="home-auth-panel" aria-label="Authentication">
+          <div id="auth-home-display-name-row" class="home-auth-display-name-row">
+            <p id="auth-home-display-name-line" class="mp-status-line">Display name: Not set</p>
+            <button id="auth-change-display-name" type="button">Change</button>
+          </div>
           <p id="auth-home-status-line" class="mp-status-line">Not signed in</p>
           <button id="auth-logout" type="button" class="button-destructive">Log Out</button>
         </section>
@@ -32,7 +36,6 @@
             <strong>Rooms</strong>
             <div class="home-sidebar__rooms-actions">
               <button id="home-refresh-rooms" type="button">Refresh</button>
-              <button id="home-reset-local-session" type="button" class="button-destructive">Reset Local</button>
             </div>
           </div>
           <p id="hub-profile-line" class="mp-status-line">Loading player history...</p>
@@ -187,6 +190,23 @@
         <ul id="log-list" class="log-list"></ul>
       </aside>
     </main>
+    <section
+      id="auth-display-name-modal"
+      class="auth-display-name-modal"
+      aria-label="Set display name"
+      role="dialog"
+      aria-modal="true"
+      style="display:none"
+    >
+      <div class="auth-display-name-modal__card">
+        <h2 id="auth-display-name-modal-title">Set your display name</h2>
+        <p class="mp-status-line">This name is shown to other players.</p>
+        <label for="auth-display-name-input">Display name</label>
+        <input id="auth-display-name-input" type="text" maxlength="24" autocomplete="nickname" />
+        <button id="auth-display-name-save" type="button">Save</button>
+        <p id="auth-display-name-feedback" class="mp-status-line"></p>
+      </div>
+    </section>
     <script src="src/shared/logLevels.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="src/core/ports/loggerPort.js"></script>
@@ -201,7 +221,7 @@
     <script src="src/core/services/roundEngineService.js"></script>
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
-    <script src="src/app/flows/homeModeFlow.js?v=20260215-14"></script>
-    <script src="src/app/bootstrap.js?v=20260216-50"></script>
+    <script src="src/app/flows/homeModeFlow.js?v=20260216-15"></script>
+    <script src="src/app/bootstrap.js?v=20260216-53"></script>
   </body>
 </html>

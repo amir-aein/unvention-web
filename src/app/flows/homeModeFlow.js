@@ -33,6 +33,11 @@
       : function fallbackCanAccessMultiplayer() {
         return true;
       };
+    const getMultiplayerAccessError = typeof deps.getMultiplayerAccessError === "function"
+      ? deps.getMultiplayerAccessError
+      : function fallbackGetMultiplayerAccessError() {
+        return "Sign in required";
+      };
     const persistHomeUiState = deps.persistHomeUiState;
     const getVariableSetupSelection = deps.getVariableSetupSelection || function fallbackGetVariableSetupSelection() {
       return { order: true, idea: true, parts: true };
@@ -41,7 +46,7 @@
 
     async function joinMultiplayerRoomByCode(requestedRoomCodeInput) {
       if (!canAccessMultiplayer()) {
-        multiplayerState.lastError = "Sign in required";
+        multiplayerState.lastError = getMultiplayerAccessError();
         renderMultiplayerUi();
         return;
       }
@@ -79,7 +84,7 @@
       if (homeCreateRoomButton) {
         homeCreateRoomButton.addEventListener("click", async function onCreateMultiplayerRoom() {
           if (!canAccessMultiplayer()) {
-            multiplayerState.lastError = "Sign in required";
+            multiplayerState.lastError = getMultiplayerAccessError();
             renderMultiplayerUi();
             return;
           }
@@ -132,7 +137,7 @@
       if (homeRefreshRoomsButton) {
         homeRefreshRoomsButton.addEventListener("click", function onRefreshRooms() {
           if (!canAccessMultiplayer()) {
-            multiplayerState.lastError = "Sign in required";
+            multiplayerState.lastError = getMultiplayerAccessError();
             renderMultiplayerUi();
             return;
           }
@@ -144,7 +149,7 @@
       if (homeResetLocalSessionButton) {
         homeResetLocalSessionButton.addEventListener("click", async function onResetLocalSession() {
           if (!canAccessMultiplayer()) {
-            multiplayerState.lastError = "Sign in required";
+            multiplayerState.lastError = getMultiplayerAccessError();
             renderMultiplayerUi();
             return;
           }

@@ -141,6 +141,24 @@ body {
   padding: 0.36rem 0.5rem;
 }
 
+.home-auth-display-name-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.home-auth-display-name-row .mp-status-line {
+  font-size: 0.76rem;
+}
+
+.home-auth-display-name-row button {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+}
+
 .home-sidebar__nav-item {
   display: block;
   border: 1px solid #d6dee8;
@@ -435,6 +453,8 @@ body {
   width: 100%;
   padding: 0.52rem 0.5rem;
   text-decoration: none;
+  will-change: transform;
+  transition: transform 240ms ease, border-color 140ms ease, background 140ms ease;
 }
 
 .mp-hub-room-item:hover {
@@ -464,6 +484,14 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.4rem;
+}
+
+.mp-hub-room-item__pill-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.22rem;
 }
 
 .mp-room-status-pill {
@@ -501,6 +529,12 @@ body {
   border-color: #86efac;
   background: #f0fdf4;
   color: #166534;
+}
+
+.mp-room-status-pill--hosting {
+  border-color: #f9a8d4;
+  background: #fdf2f8;
+  color: #9d174d;
 }
 
 .mp-hub-room-list__empty {
@@ -673,6 +707,52 @@ body {
   margin: 0;
   font-size: 0.78rem;
   color: #475569;
+}
+
+.auth-display-name-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgba(15, 23, 42, 0.5);
+  padding: 1rem;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-display-name-modal__card {
+  width: min(420px, 96vw);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 1rem;
+  display: grid;
+  gap: 0.55rem;
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.24);
+}
+
+.auth-display-name-modal__card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #0f172a;
+}
+
+.auth-display-name-modal__card label {
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.auth-display-name-modal__card input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.58rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.auth-display-name-modal__card button {
+  justify-self: start;
 }
 
 .app {

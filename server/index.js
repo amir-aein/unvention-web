@@ -1911,6 +1911,10 @@ function listActiveRoomsForProfile(profileIdInput) {
   }
   return Array.from(rooms.values())
     .map((room) => {
+      const roomStatus = String(room?.status || "").trim().toLowerCase();
+      if (roomStatus !== "lobby" && roomStatus !== "in_game") {
+        return null;
+      }
       const players = Array.isArray(room.players) ? room.players : [];
       const me = players.find((player) => String(player?.profileId || "") === profileId);
       if (!me) {

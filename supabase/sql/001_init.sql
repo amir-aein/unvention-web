@@ -16,12 +16,14 @@ create extension if not exists pgcrypto;
 create table if not exists public.app_users (
   user_id uuid primary key references auth.users(id) on delete cascade,
   email text,
-  display_name text not null default 'Player',
+  display_name text not null default '',
   legacy_profile_token text unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_seen_at timestamptz
 );
+
+alter table public.app_users alter column display_name set default '';
 
 -- Mirror of the current server-generated profiles.json (legacy identity).
 create table if not exists public.legacy_profiles (
@@ -78,17 +80,11 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  derived_display_name text;
 begin
-  derived_display_name :=
-    coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'), ''), split_part(new.email, '@', 1), 'Player');
-
-  insert into public.app_users (user_id, email, display_name)
-  values (new.id, new.email, left(derived_display_name, 24))
+  insert into public.app_users (user_id, email)
+  values (new.id, new.email)
   on conflict (user_id) do update
-    set email = excluded.email,
-        display_name = excluded.display_name;
+    set email = excluded.email;
 
   return new;
 end;
@@ -124,4 +120,3 @@ with check (auth.uid() = user_id);
 -- (No policies created.)
 
 commit;
-

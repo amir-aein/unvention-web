@@ -5,6 +5,38 @@ function resetBootstrapModule() {
   delete require.cache[require.resolve('../../src/app/bootstrap.js')];
 }
 
+function createStorage() {
+  const data = new Map();
+  return {
+    getItem(key) {
+      return data.has(String(key)) ? data.get(String(key)) : null;
+    },
+    setItem(key, value) {
+      data.set(String(key), String(value));
+    },
+    removeItem(key) {
+      data.delete(String(key));
+    },
+    clear() {
+      data.clear();
+    },
+  };
+}
+
+function createJsonResponse(payload, statusCode) {
+  const status = Number(statusCode || 200);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      return payload;
+    },
+    async text() {
+      return JSON.stringify(payload);
+    },
+  };
+}
+
 function buildHarness() {
   const listeners = {};
   const sendCalls = [];
@@ -39,6 +71,25 @@ function buildHarness() {
     logs: [],
   };
 
+  const authState = {
+    session: {
+      user: {
+        id: 'user-1',
+        email: 'tester@example.com',
+        user_metadata: {},
+      },
+    },
+    onChange: null,
+  };
+
+  const profileRow = {
+    user_id: 'user-1',
+    email: 'tester@example.com',
+    display_name: 'Tester',
+    legacy_profile_token: null,
+    last_seen_at: null,
+  };
+
   const makeNode = () => ({
     style: {},
     classList: { toggle() {} },
@@ -65,6 +116,15 @@ function buildHarness() {
   });
 
   globalThis.confirm = () => true;
+  globalThis.location = {
+    origin: 'http://localhost:8080',
+    protocol: 'http:',
+    host: 'localhost:8080',
+    hostname: 'localhost',
+    port: '8080',
+  };
+  globalThis.localStorage = createStorage();
+  globalThis.sessionStorage = createStorage();
   globalThis.document = {
     querySelectorAll() {
       return [];
@@ -90,6 +150,98 @@ function buildHarness() {
       node.__id = id;
       return node;
     },
+  };
+
+  globalThis.supabase = {
+    createClient() {
+      return {
+        auth: {
+          onAuthStateChange(callback) {
+            authState.onChange = callback;
+            return {
+              data: {
+                subscription: {
+                  unsubscribe() {
+                    authState.onChange = null;
+                  },
+                },
+              },
+            };
+          },
+          async getSession() {
+            return {
+              data: {
+                session: authState.session,
+              },
+            };
+          },
+          async signInWithOtp() {
+            return { error: null };
+          },
+          async signOut() {
+            authState.session = null;
+            if (typeof authState.onChange === 'function') {
+              authState.onChange('SIGNED_OUT', null);
+            }
+            return { error: null };
+          },
+        },
+        from(tableName) {
+          assert.equal(String(tableName || ''), 'app_users');
+          return {
+            select() {
+              return {
+                eq(columnName, value) {
+                  const column = String(columnName || '');
+                  const userId = String(value || '');
+                  return {
+                    async maybeSingle() {
+                      if (column === 'user_id' && userId === profileRow.user_id) {
+                        return { data: { ...profileRow }, error: null };
+                      }
+                      return { data: null, error: null };
+                    },
+                  };
+                },
+              };
+            },
+            update(patchInput) {
+              const patch = patchInput && typeof patchInput === 'object' ? patchInput : {};
+              return {
+                async eq(columnName, value) {
+                  const column = String(columnName || '');
+                  const userId = String(value || '');
+                  if (column === 'user_id' && userId === profileRow.user_id) {
+                    Object.assign(profileRow, patch);
+                  }
+                  return { error: null };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  globalThis.fetch = async function fetchStub(urlInput) {
+    const url = String(urlInput || '');
+    if (url.includes('/api/auth/config')) {
+      return createJsonResponse({
+        ok: true,
+        enabled: true,
+        url: 'https://project.supabase.co',
+        publishableKey: 'sb_publishable_test_key',
+        serverTime: Date.now(),
+      }, 200);
+    }
+    if (url.includes('/api/rooms')) {
+      return createJsonResponse({ roomList: [] }, 200);
+    }
+    if (url.includes('/api/profile')) {
+      return createJsonResponse({ profile: null, activeRooms: [], recentRooms: [], serverTime: Date.now() }, 200);
+    }
+    return createJsonResponse({ ok: false, error: 'not_found' }, 404);
   };
 
   globalThis.Unvention = {
@@ -190,8 +342,18 @@ function cleanupGlobals() {
   delete globalThis.document;
   delete globalThis.confirm;
   delete globalThis.Unvention;
+  delete globalThis.fetch;
+  delete globalThis.supabase;
+  delete globalThis.location;
   delete globalThis.localStorage;
   delete globalThis.sessionStorage;
+}
+
+async function flushAsyncWork(ticks) {
+  const total = Math.max(1, Number(ticks || 1));
+  for (let index = 0; index < total; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 test('multiplayer create action sends create_room and does not start local game', async () => {
@@ -199,6 +361,7 @@ test('multiplayer create action sends create_room and does not start local game'
   const harness = buildHarness();
   harness.uiState.seedInputValue = 'SEED-123';
   require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
 
   await harness.listeners['home-create-room:click']();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -215,6 +378,7 @@ test('joining an open room from directory sends join_room with selected room cod
   resetBootstrapModule();
   const harness = buildHarness();
   require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
 
   const clickListener = harness.listeners['mp-room-directory:click'];
   assert.equal(typeof clickListener, 'function');

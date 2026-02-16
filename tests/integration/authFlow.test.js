@@ -48,6 +48,9 @@ function createJsonResponse(payload, statusCode) {
 function createHarness(optionsInput) {
   const options = optionsInput && typeof optionsInput === 'object' ? optionsInput : {};
   const initialSession = options.initialSession || null;
+  const initialDisplayName = typeof options.initialDisplayName === 'string'
+    ? options.initialDisplayName
+    : 'Player';
   const listeners = {};
   const nodes = new Map();
 
@@ -152,7 +155,7 @@ function createHarness(optionsInput) {
   const profileRow = {
     user_id: String(initialSession?.user?.id || 'user-1'),
     email: String(initialSession?.user?.email || 'player@example.com'),
-    display_name: 'Player',
+    display_name: initialDisplayName,
     legacy_profile_token: null,
     last_seen_at: null,
   };
@@ -385,6 +388,7 @@ function createHarness(optionsInput) {
     listeners,
     getNode,
     authState,
+    profileRow,
   };
 }
 
@@ -448,6 +452,42 @@ test('signed-in session unlocks home screen and logout returns to auth gate', as
   assert.equal(harness.authState.signOutCalls, 1);
   assert.equal(harness.getNode('auth-gate-screen').style.display, 'flex');
   assert.equal(harness.getNode('new-game-screen').style.display, 'none');
+
+  cleanupGlobals();
+});
+
+test('signed-in user without display name is prompted to set one before continuing', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    initialDisplayName: '',
+    initialSession: {
+      user: {
+        id: 'user-1',
+        email: 'player@example.com',
+        user_metadata: {},
+      },
+    },
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  assert.equal(harness.getNode('auth-display-name-modal').style.display, 'flex');
+  assert.match(String(harness.getNode('auth-home-display-name-line').textContent || ''), /Display name: Not set/);
+
+  harness.getNode('auth-display-name-input').value = 'Alex';
+  const inputListener = harness.listeners['auth-display-name-input:input'];
+  assert.equal(typeof inputListener, 'function');
+  inputListener();
+
+  const saveListener = harness.listeners['auth-display-name-save:click'];
+  assert.equal(typeof saveListener, 'function');
+  await saveListener();
+  await flushAsyncWork(8);
+
+  assert.equal(harness.profileRow.display_name, 'Alex');
+  assert.equal(harness.getNode('auth-display-name-modal').style.display, 'none');
+  assert.match(String(harness.getNode('auth-home-display-name-line').textContent || ''), /Display name: Alex/);
 
   cleanupGlobals();
 });
