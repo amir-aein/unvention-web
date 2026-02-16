@@ -10,6 +10,7 @@
     "simulate": "node sim/runner.js",
     "server": "node server/index.js",
     "server:smoke": "node server/smoke.js",
+    "supabase:import-legacy": "node tools/import-supabase-legacy.js",
     "ui:screenshot": "bash tools/capture-ui-screenshot.sh",
     "ui:check": "npm run ui:screenshot && npm test"
   },

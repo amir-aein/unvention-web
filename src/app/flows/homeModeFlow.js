@@ -28,6 +28,11 @@
       : function fallbackGetDefaultPlayerName() {
         return "Player";
       };
+    const canAccessMultiplayer = typeof deps.canAccessMultiplayer === "function"
+      ? deps.canAccessMultiplayer
+      : function fallbackCanAccessMultiplayer() {
+        return true;
+      };
     const persistHomeUiState = deps.persistHomeUiState;
     const getVariableSetupSelection = deps.getVariableSetupSelection || function fallbackGetVariableSetupSelection() {
       return { order: true, idea: true, parts: true };
@@ -35,6 +40,11 @@
     const setVariableSetupSelection = deps.setVariableSetupSelection || function fallbackSetVariableSetupSelection() {};
 
     async function joinMultiplayerRoomByCode(requestedRoomCodeInput) {
+      if (!canAccessMultiplayer()) {
+        multiplayerState.lastError = "Sign in required";
+        renderMultiplayerUi();
+        return;
+      }
       const requestedRoomCode = String(requestedRoomCodeInput || "").trim().toUpperCase();
       multiplayerState.name = getDefaultPlayerName();
       multiplayerState.lastError = "";
@@ -68,6 +78,11 @@
       const homeCreateRoomButton = documentRef?.getElementById("home-create-room");
       if (homeCreateRoomButton) {
         homeCreateRoomButton.addEventListener("click", async function onCreateMultiplayerRoom() {
+          if (!canAccessMultiplayer()) {
+            multiplayerState.lastError = "Sign in required";
+            renderMultiplayerUi();
+            return;
+          }
           persistHomeUiState();
           const seedInput = documentRef?.getElementById("mp-seed");
           multiplayerState.name = getDefaultPlayerName();
@@ -116,6 +131,11 @@
       const homeRefreshRoomsButton = documentRef?.getElementById("home-refresh-rooms");
       if (homeRefreshRoomsButton) {
         homeRefreshRoomsButton.addEventListener("click", function onRefreshRooms() {
+          if (!canAccessMultiplayer()) {
+            multiplayerState.lastError = "Sign in required";
+            renderMultiplayerUi();
+            return;
+          }
           refreshPlayerHub(true);
         });
       }
@@ -123,6 +143,11 @@
       const homeResetLocalSessionButton = documentRef?.getElementById("home-reset-local-session");
       if (homeResetLocalSessionButton) {
         homeResetLocalSessionButton.addEventListener("click", async function onResetLocalSession() {
+          if (!canAccessMultiplayer()) {
+            multiplayerState.lastError = "Sign in required";
+            renderMultiplayerUi();
+            return;
+          }
           const confirmed = typeof globalRef.confirm === "function"
             ? globalRef.confirm("Reset local multiplayer state and remove your active rooms from this server?")
             : true;

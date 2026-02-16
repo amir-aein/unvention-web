@@ -1,50 +1,54 @@
-# Future Feature Ideas
+# Product Roadmap
 
-This document tracks potential future development items for Unvention.
+This document tracks shipped milestones and next development priorities for Unvention.
 
-## Active Ideas
+## Recently Shipped (February 2026)
 
-1. **Concurrent Rooms + Player Hub**
-Short description: Let one player be connected to multiple rooms across sessions, with a hub to resume, switch, or leave rooms quickly.
+1. **Supabase event persistence + auth foundation** (February 16, 2026)
+Adds Supabase schema + RLS baseline, legacy import tooling, live room event/profile sync from server, and frontend email OTP auth wiring with profile-token linking hooks.
+
+2. **Multiplayer hub + multi-room switching hardening** (February 15, 2026)
+Includes room hub flow refactor, safer room switching, and integration coverage for multi-room transitions.
+
+3. **Stable multiplayer profile identity + history APIs** (February 14, 2026)
+Adds stable profile tokens, reconnect-aware identity, profile/room history endpoints, and persisted profile snapshots.
+
+4. **Variable setup pipeline + workshop UI upgrades** (February 14, 2026)
+Moves setup into a modular pipeline and updates workshop handling/UI across solo and multiplayer paths.
+
+5. **Turn/action dice UX polish** (February 14, 2026)
+Improves dice interaction clarity and visual feedback during active phases.
+
+## Current Priorities
+
+1. **Auth Completion + Account UX** (`Now - Best Next Option`)
+Why now: auth + persistence foundations are now live, so finishing this closes identity consistency across devices and unlocks user-facing account trust quickly.
+Scope:
+- Add auth loading/error states and resend cooldown polish in the home panel.
+- Add authenticated profile settings edit path (`display_name`) with validation.
+- Add sign-in gating rules for account-scoped features and clear signed-out fallback behavior.
+- Add auth integration test coverage for OTP flow and session restore.
 
 2. **Room and Profile History UI**
-Short description: Add in-app timelines for room events and personal match history so players can review what happened and return to recent games.
+Short description: Add timeline/history surfaces in the multiplayer hub backed by existing history endpoints and Supabase-backed event persistence.
 
-3. **Authentication and Login**
-Short description: Add account login (for example email magic link) so player identity persists across devices and survives browser resets.
+3. **Multiplayer Integrity Hardening**
+Short description: Increase trust in multiplayer outcomes with deeper server-side validation and anti-abuse checks.
 
-4. **New Inventions and Tools**
-Short description: Expand the content pool with additional invention templates and tools, then rebalance with simulation runs.
+4. **Bot Seat Fill**
+Short description: Fill missing seats with AI players so rooms can start without waiting for full parties.
 
-5. **Roughlite Solo Mode**
-Short description: Add a faster, replayable solo mode with run-based progression, higher randomness, and high-score driven sessions.
+## Backlog Ideas
 
-6. **Guided Tutorial Mode**
-Short description: Add an onboarding path that teaches phases, legal actions, and basic strategy using guided prompts.
-
-7. **Bot Seat Fill**
-Short description: Allow missing multiplayer seats to be filled by AI players so rooms can start without waiting for full parties.
-
-8. **Asynchronous Multiplayer**
-Short description: Support turn-based play across longer time windows so players can take turns without being online together.
-
-9. **Spectator Mode**
-Short description: Let non-players watch room state updates in real time for learning, streaming, and community events.
-
-10. **Ranked Ladders and Seasons**
-Short description: Add competitive progression with seasonal resets, ranks, and match outcomes tied to player standing.
-
-11. **Post-Game Insights**
-Short description: Provide end-of-game analysis showing scoring breakdowns, pivotal decisions, and missed opportunities.
-
-12. **In-Game Social Layer**
-Short description: Add lightweight social features like lobby chat, rematch voting, and quick invite-back flows.
-
-13. **Balance and Quality Dashboard**
-Short description: Build an internal dashboard from simulation and server logs to track stability, balance drift, and feature impact.
-
-14. **Multiplayer Integrity Hardening**
-Short description: Increase trust in multiplayer outcomes by adding stronger server-side validation and anti-abuse checks.
+- New Inventions and Tools
+- Roguelite Solo Mode
+- Guided Tutorial Mode
+- Asynchronous Multiplayer
+- Spectator Mode
+- Ranked Ladders and Seasons
+- Post-Game Insights
+- In-Game Social Layer
+- Balance and Quality Dashboard
 
 ## Not Prioritized Right Now
 

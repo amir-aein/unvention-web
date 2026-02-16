@@ -31,6 +31,7 @@
   const MULTIPLAYER_STORAGE_KEY = "unvention.multiplayer.v1";
   const MULTIPLAYER_SESSION_KEY = "unvention.multiplayer.session.v1";
   const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
+  const AUTH_UI_STORAGE_KEY = "unvention.auth.ui.v1";
   const ROOM_CITY_POOL = [
     "London", "Paris", "Berlin", "Vienna", "Zurich", "Geneva", "Basel", "Milan", "Turin", "Bologna",
     "Florence", "Rome", "Naples", "Barcelona", "Madrid", "Valencia", "Lisbon", "Porto", "Amsterdam", "Rotterdam",
@@ -117,7 +118,10 @@
   let sectionViewTransitionPending = false;
   let homeStep = "mode";
   let forceHomeSurface = true;
+  let supabaseAuth = createAuthController();
+  let authProfileSyncTimer = null;
   loadHomeUiState();
+  loadAuthUiState();
   homeStep = "mode";
   const originalLogEvent = loggerService.logEvent.bind(loggerService);
   loggerService.logEvent = function logEventWithTurnCapture(level, message, context) {
@@ -284,6 +288,382 @@
         homeStep,
       }));
     } catch (_error) {}
+  }
+
+  function createAuthController() {
+    return {
+      enabled: false,
+      loading: true,
+      initializing: false,
+      statusMessage: "Checking authentication...",
+      feedbackMessage: "",
+      feedbackLevel: "info",
+      email: "",
+      session: null,
+      user: null,
+      profile: null,
+      client: null,
+      unsubscribe: null,
+      profileSyncInFlight: false,
+    };
+  }
+
+  function loadAuthUiState() {
+    const localStorageRef = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
+    if (!localStorageRef) {
+      return;
+    }
+    try {
+      const raw = localStorageRef.getItem(AUTH_UI_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") {
+        return;
+      }
+      supabaseAuth.email = String(parsed.email || "").trim();
+    } catch (_error) {}
+  }
+
+  function persistAuthUiState() {
+    const localStorageRef = typeof globalScope.localStorage !== "undefined" ? globalScope.localStorage : null;
+    if (!localStorageRef) {
+      return;
+    }
+    try {
+      localStorageRef.setItem(
+        AUTH_UI_STORAGE_KEY,
+        JSON.stringify({
+          email: String(supabaseAuth.email || "").trim(),
+        }),
+      );
+    } catch (_error) {}
+  }
+
+  function isAuthenticated() {
+    return Boolean(supabaseAuth.enabled && supabaseAuth.user);
+  }
+
+  function requireAuthenticatedUser(messageInput) {
+    if (isAuthenticated()) {
+      return true;
+    }
+    multiplayerState.lastError = String(messageInput || "Sign in required");
+    setAuthFeedback(String(messageInput || "Sign in required"), "error");
+    return false;
+  }
+
+  function getAuthDisplayNameFallback() {
+    const profileName = String(supabaseAuth.profile?.display_name || "").trim();
+    if (profileName) {
+      return profileName;
+    }
+    const rawMetaName = String(supabaseAuth.user?.user_metadata?.display_name || "").trim();
+    if (rawMetaName) {
+      return rawMetaName;
+    }
+    const email = String(supabaseAuth.user?.email || "").trim();
+    if (!email) {
+      return "";
+    }
+    const localPart = email.split("@")[0] || "";
+    return String(localPart || "").trim().slice(0, 24);
+  }
+
+  function setAuthFeedback(messageInput, levelInput) {
+    supabaseAuth.feedbackMessage = String(messageInput || "");
+    supabaseAuth.feedbackLevel = String(levelInput || "info");
+    renderMultiplayerUi();
+  }
+
+  function sanitizeAuthEmail(emailInput) {
+    return String(emailInput || "").trim().toLowerCase();
+  }
+
+  async function initializeSupabaseAuth() {
+    if (supabaseAuth.initializing || supabaseAuth.client) {
+      return;
+    }
+    supabaseAuth.initializing = true;
+    supabaseAuth.loading = true;
+    supabaseAuth.statusMessage = "Loading auth...";
+    renderMultiplayerUi();
+
+    const createClient =
+      globalScope?.supabase && typeof globalScope.supabase.createClient === "function"
+        ? globalScope.supabase.createClient
+        : null;
+    if (!createClient) {
+      supabaseAuth.enabled = false;
+      supabaseAuth.loading = false;
+      supabaseAuth.initializing = false;
+      supabaseAuth.statusMessage = "Auth unavailable";
+      renderMultiplayerUi();
+      return;
+    }
+
+    const configResult = await fetchFirstJsonFromCandidates(
+      buildApiCandidates(multiplayerState.url, "/api/auth/config"),
+    );
+    const config = configResult?.ok ? configResult.payload : null;
+    const configEnabled = Boolean(config?.enabled && config?.url && config?.publishableKey);
+    if (!configEnabled || !createClient) {
+      supabaseAuth.enabled = false;
+      supabaseAuth.loading = false;
+      supabaseAuth.initializing = false;
+      supabaseAuth.statusMessage = configEnabled
+        ? "Supabase client unavailable"
+        : "Auth unavailable";
+      renderMultiplayerUi();
+      return;
+    }
+
+    try {
+      supabaseAuth.client = createClient(String(config.url), String(config.publishableKey), {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+        },
+      });
+      supabaseAuth.enabled = true;
+      const authSubscription = supabaseAuth.client.auth.onAuthStateChange((_event, session) => {
+        applyAuthSession(session).catch(() => {});
+      });
+      const unsubscribe = authSubscription?.data?.subscription?.unsubscribe;
+      supabaseAuth.unsubscribe = typeof unsubscribe === "function" ? unsubscribe : null;
+      const sessionResult = await supabaseAuth.client.auth.getSession();
+      await applyAuthSession(sessionResult?.data?.session || null);
+    } catch (error) {
+      supabaseAuth.enabled = false;
+      supabaseAuth.statusMessage = "Auth initialization failed";
+      setAuthFeedback("Could not initialize auth: " + String(error?.message || "unknown_error"), "error");
+    } finally {
+      supabaseAuth.loading = false;
+      supabaseAuth.initializing = false;
+      renderMultiplayerUi();
+    }
+  }
+
+  async function applyAuthSession(sessionInput) {
+    const session = sessionInput || null;
+    supabaseAuth.session = session;
+    supabaseAuth.user = session?.user || null;
+    supabaseAuth.profile = null;
+    if (session?.user) {
+      supabaseAuth.statusMessage = "Logged in as " + String(session.user.email || "user");
+      if (!supabaseAuth.email && session.user.email) {
+        supabaseAuth.email = sanitizeAuthEmail(session.user.email);
+      }
+      supabaseAuth.feedbackMessage = "";
+      persistAuthUiState();
+      await refreshAuthProfile();
+      queueAuthProfileSync("session");
+    } else {
+      supabaseAuth.statusMessage = supabaseAuth.enabled ? "Not signed in" : "Auth unavailable";
+    }
+    renderMultiplayerUi();
+    renderState();
+  }
+
+  async function refreshAuthProfile() {
+    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+      return;
+    }
+    const { data, error } = await supabaseAuth.client
+      .from("app_users")
+      .select("user_id,email,display_name,legacy_profile_token,last_seen_at")
+      .eq("user_id", String(supabaseAuth.user.id))
+      .maybeSingle();
+    if (error) {
+      setAuthFeedback("Could not load profile: " + String(error.message || "unknown_error"), "error");
+      return;
+    }
+    supabaseAuth.profile = data || null;
+    const profileName = String(supabaseAuth.profile?.display_name || "").trim();
+    if (profileName) {
+      multiplayerState.name = profileName;
+      persistMultiplayerState();
+    }
+  }
+
+  function queueAuthProfileSync(reasonInput) {
+    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+      return;
+    }
+    if (authProfileSyncTimer) {
+      globalScope.clearTimeout(authProfileSyncTimer);
+    }
+    authProfileSyncTimer = globalScope.setTimeout(() => {
+      authProfileSyncTimer = null;
+      syncAuthProfile(reasonInput).catch(() => {});
+    }, 120);
+  }
+
+  async function syncAuthProfile(reasonInput) {
+    if (!supabaseAuth.client || !supabaseAuth.user?.id || supabaseAuth.profileSyncInFlight) {
+      return;
+    }
+    supabaseAuth.profileSyncInFlight = true;
+    try {
+      const displayName = String(getAuthDisplayNameFallback() || getDefaultPlayerName() || "Player").slice(0, 24);
+      const legacyProfileToken = String(multiplayerState.profileToken || "").trim() || null;
+      const patch = {
+        display_name: displayName,
+        last_seen_at: new Date().toISOString(),
+      };
+      if (legacyProfileToken) {
+        patch.legacy_profile_token = legacyProfileToken;
+      }
+      const { error } = await supabaseAuth.client
+        .from("app_users")
+        .update(patch)
+        .eq("user_id", String(supabaseAuth.user.id));
+      if (error) {
+        setAuthFeedback(
+          "Profile sync failed (" + String(reasonInput || "update") + "): " + String(error.message || "unknown_error"),
+          "error",
+        );
+        return;
+      }
+      await refreshAuthProfile();
+    } finally {
+      supabaseAuth.profileSyncInFlight = false;
+      renderMultiplayerUi();
+    }
+  }
+
+  async function sendAuthMagicLink() {
+    const email = sanitizeAuthEmail(supabaseAuth.email);
+    if (!email || !supabaseAuth.client || !supabaseAuth.enabled) {
+      return;
+    }
+    supabaseAuth.loading = true;
+    renderMultiplayerUi();
+    const emailRedirectTo =
+      typeof globalScope.location !== "undefined"
+        ? String(globalScope.location.origin || "").replace(/\/$/, "") + "/"
+        : undefined;
+    const { error } = await supabaseAuth.client.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo,
+      },
+    });
+    supabaseAuth.loading = false;
+    if (error) {
+      setAuthFeedback("Could not send link: " + String(error.message || "unknown_error"), "error");
+      return;
+    }
+    persistAuthUiState();
+    setAuthFeedback("Magic link sent to " + email + ". Check inbox/spam.", "info");
+  }
+
+  async function logoutAuth() {
+    if (!supabaseAuth.client || !supabaseAuth.enabled) {
+      return;
+    }
+    supabaseAuth.loading = true;
+    renderMultiplayerUi();
+    const { error } = await supabaseAuth.client.auth.signOut();
+    supabaseAuth.loading = false;
+    if (error) {
+      setAuthFeedback("Could not log out: " + String(error.message || "unknown_error"), "error");
+      return;
+    }
+    supabaseAuth.session = null;
+    supabaseAuth.user = null;
+    supabaseAuth.profile = null;
+    supabaseAuth.statusMessage = "Signed out";
+    resetMultiplayerForHomeAction({ preserveHomeStep: true, preserveRoomSessions: false });
+    multiplayerState.profileId = "";
+    multiplayerState.profileToken = "";
+    roomDirectoryRows = [];
+    hubProfileSummary = null;
+    hubProfileError = "";
+    roomDirectoryError = "";
+    homeStep = "mode";
+    persistAuthUiState();
+    setAuthFeedback("Signed out", "info");
+    renderMultiplayerUi();
+    renderState();
+  }
+
+  function renderAuthUi() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const loginStatusLine = document.getElementById("auth-login-status-line");
+    const loginFeedbackLine = document.getElementById("auth-login-feedback-line");
+    const emailInput = document.getElementById("auth-login-email-input");
+    const sendButton = document.getElementById("auth-send-link");
+    const homeStatusLine = document.getElementById("auth-home-status-line");
+    const logoutButton = document.getElementById("auth-logout");
+    const statusText = String(
+      supabaseAuth.loading
+        ? "Checking authentication..."
+        : supabaseAuth.statusMessage || (supabaseAuth.enabled ? "Not signed in" : "Auth unavailable"),
+    );
+    if (loginStatusLine) {
+      loginStatusLine.textContent = statusText;
+    }
+    if (loginFeedbackLine) {
+      loginFeedbackLine.textContent = String(supabaseAuth.feedbackMessage || "");
+      loginFeedbackLine.style.color = supabaseAuth.feedbackLevel === "error" ? "#b91c1c" : "";
+    }
+    if (homeStatusLine) {
+      homeStatusLine.textContent = isAuthenticated()
+        ? "Logged in as " + String(supabaseAuth.user?.email || "user")
+        : "Not signed in";
+    }
+    if (emailInput) {
+      if (String(emailInput.value || "") !== String(supabaseAuth.email || "")) {
+        emailInput.value = String(supabaseAuth.email || "");
+      }
+      emailInput.disabled = !supabaseAuth.enabled || supabaseAuth.loading || isAuthenticated();
+    }
+    if (sendButton) {
+      sendButton.disabled =
+        !supabaseAuth.enabled || supabaseAuth.loading || isAuthenticated() || !sanitizeAuthEmail(supabaseAuth.email);
+    }
+    if (logoutButton) {
+      logoutButton.disabled = !supabaseAuth.enabled || supabaseAuth.loading || !isAuthenticated();
+    }
+  }
+
+  function bindAuthControls() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const emailInput = document.getElementById("auth-login-email-input");
+    if (emailInput && typeof emailInput.addEventListener === "function") {
+      emailInput.addEventListener("input", function onAuthEmailInput() {
+        supabaseAuth.email = sanitizeAuthEmail(emailInput.value);
+        persistAuthUiState();
+        renderMultiplayerUi();
+      });
+      emailInput.addEventListener("keydown", function onAuthEmailKeydown(event) {
+        if (String(event?.key || "").toLowerCase() !== "enter") {
+          return;
+        }
+        event.preventDefault();
+        sendAuthMagicLink();
+      });
+    }
+    const sendButton = document.getElementById("auth-send-link");
+    if (sendButton && typeof sendButton.addEventListener === "function") {
+      sendButton.addEventListener("click", function onAuthSendLinkClick() {
+        sendAuthMagicLink();
+      });
+    }
+    const logoutButton = document.getElementById("auth-logout");
+    if (logoutButton && typeof logoutButton.addEventListener === "function") {
+      logoutButton.addEventListener("click", function onAuthLogoutClick() {
+        logoutAuth();
+      });
+    }
   }
 
   function getRoomCityName(roomCodeInput) {
@@ -639,6 +1019,7 @@
     hubSelectedRoomCode = "";
     gameSurfaceRoomCode = "";
     persistMultiplayerState();
+    queueAuthProfileSync("reset_local_multiplayer");
     setHomeStep("mode");
     renderMultiplayerUi();
     await refreshRoomDirectory(true);
@@ -854,6 +1235,13 @@
   }
 
   async function refreshRoomDirectory(force) {
+    if (!isAuthenticated()) {
+      roomDirectoryRows = [];
+      roomDirectoryLoading = false;
+      roomDirectoryError = "";
+      renderRoomDirectory();
+      return;
+    }
     if (typeof fetch !== "function") {
       roomDirectoryRows = [];
       roomDirectoryError = "Room list unavailable";
@@ -1195,6 +1583,13 @@
   }
 
   async function refreshHubProfileSummary(force) {
+    if (!isAuthenticated()) {
+      hubProfileSummary = null;
+      hubProfileError = "";
+      hubProfileLoading = false;
+      renderMultiplayerUi();
+      return;
+    }
     if (!multiplayerState.profileToken) {
       hubProfileSummary = null;
       hubProfileError = "";
@@ -1246,6 +1641,14 @@
 
 
   async function refreshPlayerHub(force) {
+    if (!isAuthenticated()) {
+      roomDirectoryRows = [];
+      roomDirectoryError = "";
+      hubProfileSummary = null;
+      hubProfileError = "";
+      renderMultiplayerUi();
+      return;
+    }
     await Promise.all([
       refreshRoomDirectory(force),
       refreshHubProfileSummary(force),
@@ -1781,6 +2184,7 @@
   }
 
   function renderMultiplayerUi() {
+    renderAuthUi();
     const connectionNode = document.getElementById("mp-connection-status");
     if (connectionNode) {
       connectionNode.textContent = summarizeMultiplayerStatus();
@@ -1896,6 +2300,13 @@
   }
 
   async function ensureMultiplayerConnection() {
+    if (!isAuthenticated()) {
+      multiplayerState.connecting = false;
+      multiplayerState.connected = false;
+      multiplayerState.lastError = "Sign in required";
+      renderMultiplayerUi();
+      return;
+    }
     if (multiplayerState.connected) {
       return;
     }
@@ -1962,6 +2373,9 @@
   }
 
   async function sendMultiplayerCommand(type, payload, optionsInput) {
+    if (!requireAuthenticatedUser("Sign in required to join or play multiplayer.")) {
+      return false;
+    }
     const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
     const errorMessage = String(options.errorMessage || "not_connected");
     if (multiplayerClient.send(type, payload || {})) {
@@ -2025,7 +2439,7 @@
   }
 
   function getDefaultPlayerName() {
-    return "Player";
+    return String(getAuthDisplayNameFallback() || "Player");
   }
 
   function escapeHtml(valueInput) {
@@ -2770,6 +3184,7 @@
       homeStep = "room-list";
       persistHomeUiState();
       persistMultiplayerState();
+      queueAuthProfileSync("room_joined");
       gameStateService.update({ gameStarted: false });
       renderMultiplayerUi();
       refreshPlayerHub(true);
@@ -2822,6 +3237,7 @@
         forceHomeSurface = true;
       }
       persistMultiplayerState();
+      queueAuthProfileSync("room_state");
       persistHomeUiState();
       if (awaitingRoomStateRecovery && incomingLiveState) {
       const recoveredState = normalizeRecoveredLiveState(incomingLiveState);
@@ -2942,9 +3358,28 @@
   });
 
   function setGameSurfaceVisibility(started) {
+    const authGateScreen = document.getElementById("auth-gate-screen");
     const newGameScreen = document.getElementById("new-game-screen");
     const appShell = document.getElementById("app-shell");
     const footer = document.getElementById("action-footer");
+    if (!isAuthenticated()) {
+      if (authGateScreen && authGateScreen.style) {
+        authGateScreen.style.display = "flex";
+      }
+      if (newGameScreen && newGameScreen.style) {
+        newGameScreen.style.display = "none";
+      }
+      if (appShell && appShell.style) {
+        appShell.style.display = "none";
+      }
+      if (footer && footer.style) {
+        footer.style.display = "none";
+      }
+      return;
+    }
+    if (authGateScreen && authGateScreen.style) {
+      authGateScreen.style.display = "none";
+    }
     const currentRoomCode = normalizeRoomCode(multiplayerState.room?.code || multiplayerState.roomCode);
     const isMultiplayerSurface = hasActiveMultiplayerRoom()
       ? currentRoomCode && currentRoomCode === normalizeRoomCode(gameSurfaceRoomCode)
@@ -5422,6 +5857,7 @@
         resetLocalMultiplayerMemory,
         setHomeStep,
         getDefaultPlayerName,
+        canAccessMultiplayer: isAuthenticated,
         getVariableSetupSelection,
         setVariableSetupSelection,
         persistHomeUiState,
@@ -5430,6 +5866,7 @@
   if (homeModeFlow && typeof homeModeFlow.bindHomeControls === "function") {
     homeModeFlow.bindHomeControls();
   }
+  bindAuthControls();
 
   const hubRoomList = document.getElementById("mp-hub-room-list");
   if (hubRoomList) {
@@ -6132,6 +6569,7 @@
     });
   }
 
+  initializeSupabaseAuth().catch(() => {});
   renderMultiplayerUi();
   refreshRoomDirectory(true);
   if (multiplayerState.roomCode && multiplayerState.reconnectToken) {

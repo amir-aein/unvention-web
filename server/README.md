@@ -17,6 +17,7 @@ Open app locally:
 Server endpoints:
 - `GET /health` health check
 - `GET /api/rooms` room directory payload for multiplayer lobby
+- `GET /api/auth/config` public Supabase auth config (`url`, `publishableKey`) for browser client bootstrap
 - `GET /api/rooms/:roomCode/history?limit=150&before=<sequence>` room event history
 - `GET /api/profile?profileToken=<token>` profile summary + active/recent rooms
 - `GET /api/profile/history?profileToken=<token>&limit=150&before=<sequence>` profile event history
@@ -87,6 +88,23 @@ Each line is one JSON event with timestamp, room code, type, and payload.
 Room and profile history read models are written to:
 - `server/output/room-events.ndjson` (append-only room event stream)
 - `server/output/profiles.json` (latest profile snapshot keyed by stable token)
+
+### Optional Supabase Sync
+
+When these env vars are present, server logs are also synced to Supabase:
+- `SUPABASE_URL`
+- `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`)
+
+Synchronized tables:
+- `public.room_events`
+- `public.legacy_profiles`
+
+Local files in `server/output/*` remain source-of-truth fallback and are still written.
+
+### Optional Supabase Auth Bootstrap
+
+To enable browser auth bootstrap via `GET /api/auth/config`, also set:
+- `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`)
 
 ## One-Computer Testing
 

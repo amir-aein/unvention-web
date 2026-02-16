@@ -5,13 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unvention Web</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260215-46" />
+    <link rel="stylesheet" href="src/ui/vanilla/styles/main.css?v=20260216-48" />
   </head>
   <body>
-    <section id="new-game-screen" class="new-game-screen" aria-label="New game setup">
+    <section id="auth-gate-screen" class="auth-gate-screen" aria-label="Sign in">
+      <div class="auth-gate-card">
+        <h1>UNVENTION</h1>
+        <p id="auth-login-status-line" class="mp-status-line">Checking authentication...</p>
+        <label for="auth-login-email-input">Email</label>
+        <input id="auth-login-email-input" type="email" placeholder="you@example.com" autocomplete="email" />
+        <button id="auth-send-link" type="button">Send Magic Link</button>
+        <p id="auth-login-feedback-line" class="mp-status-line"></p>
+      </div>
+    </section>
+    <section id="new-game-screen" class="new-game-screen" aria-label="New game setup" style="display: none">
       <aside class="home-sidebar">
         <h1 class="home-sidebar__title">UNVENTION</h1>
         <p id="mp-connection-status" class="mp-status-line">Offline</p>
+        <section id="home-auth-panel" class="home-auth-panel" aria-label="Authentication">
+          <p id="auth-home-status-line" class="mp-status-line">Not signed in</p>
+          <button id="auth-logout" type="button" class="button-destructive">Log Out</button>
+        </section>
         <a id="home-sidebar-home" class="home-sidebar__nav-item" role="button" tabindex="0" data-action="hub-home-nav">Home</a>
         <div class="home-sidebar__rooms">
           <div class="home-sidebar__rooms-head">
@@ -174,6 +188,7 @@
       </aside>
     </main>
     <script src="src/shared/logLevels.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="src/core/ports/loggerPort.js"></script>
     <script src="src/core/ports/stateStorePort.js"></script>
     <script src="src/adapters/web/inMemoryLogger.js"></script>
@@ -187,6 +202,6 @@
     <script src="src/ui/vanilla/components/logSidebar.js?v=20260214-1"></script>
     <script src="src/app/container.js"></script>
     <script src="src/app/flows/homeModeFlow.js?v=20260215-14"></script>
-    <script src="src/app/bootstrap.js?v=20260215-47"></script>
+    <script src="src/app/bootstrap.js?v=20260216-50"></script>
   </body>
 </html>

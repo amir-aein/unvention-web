@@ -4,8 +4,10 @@ const path = require("node:path");
 const http = require("node:http");
 const { WebSocketServer } = require("ws");
 
-const PORT = Number(process.env.PORT || 8080);
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+loadProjectEnv(path.join(PROJECT_ROOT, ".env"));
+
+const PORT = Number(process.env.PORT || 8080);
 const MAX_PLAYERS = 5;
 const RECONNECT_WINDOW_MS = 15 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 10 * 1000;
@@ -24,6 +26,14 @@ const MAX_PROFILE_HISTORY_ENTRIES = 4000;
 const MAX_PROFILE_ROOM_ENTRIES = 30;
 const DEFAULT_HISTORY_LIMIT = 150;
 const MAX_HISTORY_LIMIT = 1000;
+const SUPABASE_SYNC = createSupabaseSync({
+  url: process.env.SUPABASE_URL,
+  secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+});
+const SUPABASE_AUTH_CONFIG = {
+  url: String(process.env.SUPABASE_URL || "").trim(),
+  publishableKey: String(process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim(),
+};
 
 const rooms = new Map();
 const connectionsById = new Map();
@@ -60,12 +70,25 @@ const httpServer = http.createServer((req, res) => {
       rooms: rooms.size,
       profiles: profilesById.size,
       serverTime: Date.now(),
+      supabaseSync: SUPABASE_SYNC.getStatus(),
     });
     return;
   }
 
   if (method === "GET" && pathname === "/api/rooms") {
     sendJson(res, 200, buildRoomDirectoryPayload());
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/auth/config") {
+    const enabled = Boolean(SUPABASE_AUTH_CONFIG.url && SUPABASE_AUTH_CONFIG.publishableKey);
+    sendJson(res, 200, {
+      ok: true,
+      enabled,
+      url: enabled ? SUPABASE_AUTH_CONFIG.url : "",
+      publishableKey: enabled ? SUPABASE_AUTH_CONFIG.publishableKey : "",
+      serverTime: Date.now(),
+    });
     return;
   }
 
@@ -1409,6 +1432,7 @@ function persistProfilesNow() {
     })),
   };
   fs.writeFile(PROFILE_SNAPSHOT_PATH, JSON.stringify(payload, null, 2), () => {});
+  SUPABASE_SYNC.upsertLegacyProfiles(payload.profiles);
 }
 
 function createProfile(displayNameInput) {
@@ -1592,6 +1616,7 @@ function appendActionLog(roomCode, type, payload) {
   if (event) {
     indexRoomHistoryEvent(event);
     fs.appendFile(ROOM_EVENT_LOG_PATH, JSON.stringify(event) + "\n", () => {});
+    SUPABASE_SYNC.upsertRoomEvent(event);
   }
 }
 
@@ -1955,6 +1980,243 @@ function resetActiveRoomsForProfile(profileTokenInput) {
     removedSeats,
     activeRooms: listActiveRoomsForProfile(profileId),
     serverTime: Date.now(),
+  };
+}
+
+function loadProjectEnv(envPathInput) {
+  const envPath = path.resolve(String(envPathInput || ""));
+  if (!envPath || !fs.existsSync(envPath)) {
+    return;
+  }
+  try {
+    const raw = fs.readFileSync(envPath, "utf8");
+    raw.split("\n").forEach((line) => {
+      const trimmed = String(line || "").trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        return;
+      }
+      const separator = trimmed.indexOf("=");
+      if (separator <= 0) {
+        return;
+      }
+      const key = trimmed.slice(0, separator).trim();
+      let value = trimmed.slice(separator + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (!(key in process.env)) {
+        process.env[key] = value;
+      }
+    });
+  } catch (_error) {}
+}
+
+function createSupabaseSync(configInput) {
+  const config = configInput && typeof configInput === "object" ? configInput : {};
+  const urlBase = String(config.url || "").trim().replace(/\/$/, "");
+  const secretKey = String(config.secretKey || "").trim();
+  const enabled = Boolean(urlBase && secretKey && typeof fetch === "function");
+  let roomEventsQueue = [];
+  let roomEventsFlushTimer = null;
+  let roomEventsFlushInFlight = false;
+  let roomEventsRetryMs = 1000;
+  let profileRowsSnapshot = [];
+  let profileFlushTimer = null;
+  let profileRetryMs = 1000;
+  let hasLoggedDisabled = false;
+  let lastRoomEventsError = "";
+  let lastProfilesError = "";
+  let lastRoomEventsSyncedAt = 0;
+  let lastProfilesSyncedAt = 0;
+
+  function logDisabledOnce() {
+    if (enabled || hasLoggedDisabled) {
+      return;
+    }
+    hasLoggedDisabled = true;
+    // eslint-disable-next-line no-console
+    console.log("Supabase sync disabled (missing SUPABASE_URL or secret key)");
+  }
+
+  async function postRows(tableName, conflictColumn, rows) {
+    if (!enabled || !rows.length) {
+      return;
+    }
+    const endpoint =
+      urlBase +
+      "/rest/v1/" +
+      encodeURIComponent(String(tableName || "")) +
+      "?on_conflict=" +
+      encodeURIComponent(String(conflictColumn || ""));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          apikey: secretKey,
+          authorization: "Bearer " + secretKey,
+          prefer: "resolution=merge-duplicates,return=minimal",
+        },
+        body: JSON.stringify(rows),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const bodyText = await response.text();
+        throw new Error(
+          "Supabase " + String(tableName || "") + " upsert failed: " + response.status + " " + bodyText,
+        );
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function toSupabaseRoomEventRow(eventInput) {
+    const event = eventInput && typeof eventInput === "object" ? eventInput : {};
+    const actor = event.actor && typeof event.actor === "object" ? event.actor : {};
+    const timestampIso = String(event.timestamp || "");
+    return {
+      event_id: String(event.eventId || ""),
+      sequence: Math.max(1, Number(event.sequence || 1)),
+      room_code: String(event.roomCode || "").toUpperCase(),
+      timestamp: timestampIso || new Date().toISOString(),
+      timestamp_ms: Math.max(0, Number(event.timestampMs || Date.now())),
+      type: String(event.type || "event"),
+      actor_player_id: actor.playerId ? String(actor.playerId) : null,
+      actor_profile_id: actor.profileId ? String(actor.profileId) : null,
+      profile_refs: Array.isArray(event.profileRefs)
+        ? event.profileRefs.map((value) => String(value || "").trim()).filter(Boolean)
+        : [],
+      payload: event.payload && typeof event.payload === "object" ? safeClone(event.payload) : {},
+    };
+  }
+
+  function toSupabaseLegacyProfileRow(profileInput) {
+    const profile = profileInput && typeof profileInput === "object" ? profileInput : {};
+    return {
+      profile_id: String(profile.profileId || "").trim(),
+      profile_token: String(profile.profileToken || "").trim() || null,
+      display_name: String(profile.displayName || "Player").slice(0, 24),
+      created_at_ms: Number(profile.createdAt || 0) || null,
+      updated_at_ms: Number(profile.updatedAt || 0) || null,
+      last_seen_at_ms: Number(profile.lastSeenAt || 0) || null,
+      rooms: Array.isArray(profile.rooms) ? safeClone(profile.rooms) : [],
+    };
+  }
+
+  function scheduleRoomEventsFlush(delayMs) {
+    if (!enabled || roomEventsFlushTimer) {
+      return;
+    }
+    roomEventsFlushTimer = setTimeout(() => {
+      roomEventsFlushTimer = null;
+      flushRoomEvents();
+    }, Math.max(10, Number(delayMs || 25)));
+  }
+
+  async function flushRoomEvents() {
+    if (!enabled || roomEventsFlushInFlight || roomEventsQueue.length === 0) {
+      return;
+    }
+    roomEventsFlushInFlight = true;
+    const chunk = roomEventsQueue.slice(0, 200);
+    roomEventsQueue = roomEventsQueue.slice(chunk.length);
+    try {
+      await postRows("room_events", "event_id", chunk);
+      roomEventsRetryMs = 1000;
+      lastRoomEventsSyncedAt = Date.now();
+      lastRoomEventsError = "";
+    } catch (error) {
+      roomEventsQueue = chunk.concat(roomEventsQueue);
+      if (roomEventsQueue.length > 4000) {
+        roomEventsQueue = roomEventsQueue.slice(roomEventsQueue.length - 4000);
+      }
+      lastRoomEventsError = String(error?.message || error).slice(0, 300);
+      // eslint-disable-next-line no-console
+      console.warn(String(error?.message || error));
+      roomEventsRetryMs = Math.min(30000, roomEventsRetryMs * 2);
+    } finally {
+      roomEventsFlushInFlight = false;
+      if (roomEventsQueue.length > 0) {
+        scheduleRoomEventsFlush(roomEventsRetryMs);
+      }
+    }
+  }
+
+  function scheduleProfileFlush(delayMs) {
+    if (!enabled || profileFlushTimer) {
+      return;
+    }
+    profileFlushTimer = setTimeout(() => {
+      profileFlushTimer = null;
+      flushLegacyProfiles();
+    }, Math.max(60, Number(delayMs || 300)));
+  }
+
+  async function flushLegacyProfiles() {
+    if (!enabled || profileRowsSnapshot.length === 0) {
+      return;
+    }
+    const rows = profileRowsSnapshot.slice();
+    try {
+      await postRows("legacy_profiles", "profile_id", rows);
+      profileRetryMs = 1000;
+      lastProfilesSyncedAt = Date.now();
+      lastProfilesError = "";
+    } catch (error) {
+      lastProfilesError = String(error?.message || error).slice(0, 300);
+      // eslint-disable-next-line no-console
+      console.warn(String(error?.message || error));
+      profileRetryMs = Math.min(30000, profileRetryMs * 2);
+      scheduleProfileFlush(profileRetryMs);
+    }
+  }
+
+  return {
+    upsertRoomEvent(eventInput) {
+      if (!enabled) {
+        logDisabledOnce();
+        return;
+      }
+      const row = toSupabaseRoomEventRow(eventInput);
+      if (!row.event_id || !row.room_code) {
+        return;
+      }
+      roomEventsQueue.push(row);
+      if (roomEventsQueue.length > 4000) {
+        roomEventsQueue = roomEventsQueue.slice(roomEventsQueue.length - 4000);
+      }
+      scheduleRoomEventsFlush(20);
+    },
+    upsertLegacyProfiles(profileRowsInput) {
+      if (!enabled) {
+        logDisabledOnce();
+        return;
+      }
+      const profileRows = Array.isArray(profileRowsInput) ? profileRowsInput : [];
+      profileRowsSnapshot = profileRows
+        .map((row) => toSupabaseLegacyProfileRow(row))
+        .filter((row) => Boolean(row.profile_id));
+      scheduleProfileFlush(250);
+    },
+    getStatus() {
+      return {
+        enabled,
+        roomEventsQueued: roomEventsQueue.length,
+        profileRowsQueued: profileRowsSnapshot.length,
+        roomEventsRetryMs,
+        profileRetryMs,
+        lastRoomEventsSyncedAt: lastRoomEventsSyncedAt || null,
+        lastProfilesSyncedAt: lastProfilesSyncedAt || null,
+        lastRoomEventsError: lastRoomEventsError || null,
+        lastProfilesError: lastProfilesError || null,
+      };
+    },
   };
 }
 
