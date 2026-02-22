@@ -3876,6 +3876,12 @@
     if (appShell && appShell.style) {
       appShell.style.display = showGameSurface ? "grid" : "none";
     }
+    const workspaceTitle = document.getElementById("workspace-title");
+    if (workspaceTitle) {
+      workspaceTitle.textContent = gameSurfaceRoomCode
+        ? formatRoomDisplayName(gameSurfaceRoomCode)
+        : "Unvention";
+    }
     if (footer && footer.style) {
       footer.style.display = showGameSurface ? "grid" : "none";
     }
@@ -6094,6 +6100,12 @@
           W3: "Electrical",
           W4: "Mechanical",
         };
+        const workshopEmojis = {
+          W1: "💧",
+          W2: "🧲",
+          W3: "⚡",
+          W4: "⚙️",
+        };
         const placements = Array.isArray(invention.placements) ? invention.placements : [];
         const activeVarietyType =
           inventionVarietyHover && inventionVarietyHover.inventionId === invention.id
@@ -6110,26 +6122,36 @@
             const marked = Boolean(marks[typeId]);
             return (
               '<span class="invention-type' +
-              (marked ? " invention-type--marked" : "") +
-              (marked ? " invention-type--hoverable" : "") +
+              (marked ? " invention-type--marked invention-type--hoverable" : " invention-type--unmarked") +
               (activeVarietyType === typeId ? " invention-type--active-hover" : "") +
               '" data-invention-id="' +
               invention.id +
               '" data-workshop-id="' +
               typeId +
-              '">' +
+              '" title="' +
               workshopNames[typeId] +
+              '">' +
+              workshopEmojis[typeId] +
               "</span>"
             );
           })
           .join("");
         const scoring = invention.scoring || {};
         const uniqueIdeasMarked = Math.min(6, Math.max(1, Number(invention.uniqueIdeasMarked || invention.multiplier || 1)));
-        const ideaTrackHtml = renderInventionIdeaTrack(uniqueIdeasMarked);
-        const uniqueTooltip = getUniqueCriterionTooltip(invention.criterionKey);
         const uniqueBase = getUniqueBaseValue(invention, player);
         const uniqueBaseLabel = getUniqueBaseLabel(invention.criterionKey);
-        const completionBonusText = getCompletionBonusText(invention.id);
+        const ideaDotsHtml = Array.from({ length: uniqueIdeasMarked }, function () {
+          return '<span class="invention-idea-dot invention-idea-dot--marked">💡</span>';
+        }).join("");
+        const uniqueTooltip = (invention.criterionLabel || "Unique") + ": " + String(Number(scoring.unique || 0)) + " pts\n" +
+          uniqueBaseLabel + ": " + String(uniqueBase) + "  ×  Ideas: " + uniqueIdeasMarked + "\n\n" +
+          getUniqueCriterionTooltip(invention.criterionKey);
+        const completionDays = getCompletionDays(invention.id);
+        const dayPillsHtml = completionDays.map(function (day) {
+          const isActive = invention.presentedDay === day.full;
+          return '<span class="invention-day-pill' + (isActive ? " invention-day-pill--active" : "") + '">' +
+            day.label + " = " + day.vp + "</span>";
+        }).join("");
         const occupiedKeys = new Set(
           placements
             .flatMap((item) => (Array.isArray(item.cells) ? item.cells : []))
@@ -6160,59 +6182,23 @@
         });
         return (
           '<article class="invention-card">' +
-          '<div class="invention-header-row">' +
-          "<h3>" +
-          invention.name +
-          "</h3>" +
-          '<span class="invention-presented' +
-          (invention.presentedDay ? " invention-presented--yes" : "") +
-          '">' +
-          (invention.presentedDay ? "Presented: " + invention.presentedDay : "Not presented") +
-          "</span>" +
-          "</div>" +
-          '<div class="invention-pattern" style="--pattern-cols:' +
-          String(pattern.cols) +
-          ';">' +
+          '<div class="invention-pattern" style="--pattern-cols:' + String(pattern.cols) + ';">' +
           pattern.html +
           "</div>" +
-          '<div class="invention-criterion-row invention-criterion-row--unique" data-tooltip="' +
-          uniqueTooltip +
+          '<div class="invention-section invention-criterion-row--unique" data-tooltip="' +
+          escapeHtml(uniqueTooltip) +
           '">' +
-          "<span>" +
-          (invention.criterionLabel || "Unique") +
-          ": " +
-          String(Number(scoring.unique || 0)) +
-          "</span>" +
-          '<span class="invention-criterion-desc">' +
-          uniqueBaseLabel +
-          " (" +
-          String(uniqueBase) +
-          ") x</span>" +
-          '<span class="invention-criterion-extra">' +
-          ideaTrackHtml +
-          "</span>" +
+          '<span class="invention-section-name">' + escapeHtml(invention.name) + "</span>" +
+          '<span class="invention-criterion-label">' + (invention.criterionLabel || "Unique") + ": " + String(Number(scoring.unique || 0)) + "</span>" +
+          '<span class="invention-criterion-compact">' + String(uniqueBase) + " \xD7 " + ideaDotsHtml + "</span>" +
           "</div>" +
-          '<div class="invention-criterion-row">' +
-          "<span>Variety: " +
-          String(Number(scoring.variety || 0)) +
-          "</span>" +
-          '<span class="invention-criterion-desc">0, 3, 7, 12 points for 1, 2, 3, 4 different types</span>' +
-          '<span class="invention-criterion-extra">' +
-          types +
-          "</span>" +
+          '<div class="invention-section">' +
+          '<span class="invention-criterion-label">Variety: ' + String(Number(scoring.variety || 0)) + "</span>" +
+          '<span class="invention-criterion-extra">' + types + "</span>" +
           "</div>" +
-          '<div class="invention-criterion-row">' +
-          "<span>Completion: " +
-          String(Number(scoring.completion || 0)) +
-          "</span>" +
-          '<span class="invention-criterion-desc">' +
-          completionBonusText +
-          "</span>" +
-          "</div>" +
-          '<div class="invention-criterion-row invention-criterion-row--total">' +
-          "<span>Total: " +
-          String(Number(scoring.total || 0)) +
-          "</span>" +
+          '<div class="invention-section">' +
+          (invention.presentedDay ? '<span class="invention-presented invention-presented--yes">' + escapeHtml(invention.presentedDay) + "</span>" : "") +
+          '<div class="invention-day-pills">' + dayPillsHtml + "</div>" +
           "</div>" +
           "</article>"
         );
@@ -6395,6 +6381,27 @@
       I3: "Friday = 18, Saturday = 16, Sunday = 12",
     };
     return map[inventionId] || "Completion bonus by presented day";
+  }
+
+  function getCompletionDays(inventionId) {
+    const map = {
+      I1: [
+        { label: "Fri", full: "Friday",   vp: 10 },
+        { label: "Sat", full: "Saturday", vp: 8  },
+        { label: "Sun", full: "Sunday",   vp: 5  },
+      ],
+      I2: [
+        { label: "Fri", full: "Friday",   vp: 13 },
+        { label: "Sat", full: "Saturday", vp: 11 },
+        { label: "Sun", full: "Sunday",   vp: 8  },
+      ],
+      I3: [
+        { label: "Fri", full: "Friday",   vp: 18 },
+        { label: "Sat", full: "Saturday", vp: 16 },
+        { label: "Sun", full: "Sunday",   vp: 12 },
+      ],
+    };
+    return map[inventionId] || [];
   }
 
   function getUniqueBaseValue(invention, player) {
@@ -6623,6 +6630,19 @@
       await sendMultiplayerCommand("kick_player", { playerId }, {
         errorMessage: "Could not kick player. Check connection.",
       });
+    });
+  }
+
+  const logSidebarToggle = document.getElementById("log-sidebar-toggle");
+  const logSidebarEl = document.getElementById("log-sidebar");
+  if (logSidebarToggle && logSidebarEl) {
+    logSidebarToggle.addEventListener("click", function onLogSidebarToggle() {
+      const collapsed = logSidebarEl.classList.toggle("log-sidebar--collapsed");
+      logSidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+      logSidebarToggle.setAttribute(
+        "aria-label",
+        collapsed ? "Expand action log" : "Collapse action log"
+      );
     });
   }
 

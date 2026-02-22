@@ -755,16 +755,15 @@ body {
 }
 
 .app {
-  display: grid;
+  display: flex;
   height: 100vh;
-  gap: 0;
-  grid-template-columns: 300px 1fr;
   overflow: hidden;
 }
 
 .workspace {
+  width: 100%;
   border-radius: 10px;
-  padding: 2rem;
+  padding: 0 2rem 2rem calc(20px + 2rem);
   min-height: 0;
   overflow: auto;
   scroll-behavior: smooth;
@@ -900,9 +899,31 @@ body {
   margin-top: 2rem;
 }
 
-.journals-panel {
-  margin-top: 2rem;
+/* ── 2×2 game panel grid ──────────────────────────────────────── */
+.game-panels-grid {
+  display: grid;
+  grid-template-columns: 3fr 7fr;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "workshops journals"
+    "tools     inventions";
+  gap: 1.5rem 2rem;
+  align-items: start;
 }
+
+#journals-panel  { grid-area: journals; }
+#inventions-panel { grid-area: inventions; }
+#workshops-panel { grid-area: workshops; }
+#tools-panel     { grid-area: tools; }
+
+/* Reset panel margins — grid gap handles spacing */
+.journals-panel,
+.workshops-panel,
+.inventions-panel,
+.tools-panel {
+  margin-top: 0;
+}
+
 
 .round-roll-panel {
   margin-top: 2rem;
@@ -1142,25 +1163,46 @@ body {
 }
 
 .workshops-container {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .inventions-container {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
 .invention-card {
-  display: grid;
-  gap: 0.45rem;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #e8edf2;
 }
 
 .invention-card h3 {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
+}
+
+/* One column per section (unique / variety / completion) */
+.invention-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  flex-shrink: 0;
+}
+
+.invention-section-name {
+  font-size: 0.6rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
 }
 
 .invention-meta {
@@ -1210,35 +1252,56 @@ body {
   background: #dcfce7;
 }
 
-.invention-criterion-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  align-items: start;
+/* .invention-criterion-row now only used as a hook for the unique tooltip */
+.invention-criterion-row--unique {
+  position: relative;
+  cursor: help;
+}
+
+.invention-criterion-label {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.invention-criterion-compact {
+  display: flex;
+  align-items: center;
   gap: 0.15rem;
-  border: 1px solid #dbe2ea;
-  border-radius: 6px;
-  padding: 0.28rem 0.4rem;
-  font-size: 0.72rem;
-  color: #334155;
-  background: #f8fafc;
-}
-
-.invention-criterion-row--total {
-  grid-template-columns: 1fr;
-  font-weight: 700;
-  gap: 0;
-}
-
-.invention-criterion-desc {
+  font-size: 0.7rem;
   color: #64748b;
 }
 
 .invention-criterion-extra {
   display: inline-flex;
   align-items: center;
-  gap: 0.24rem;
+  gap: 0.18rem;
   flex-wrap: wrap;
-  justify-content: flex-start;
+  justify-content: flex-end;
+}
+
+/* Day pills for completion scoring */
+.invention-day-pills {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.invention-day-pill {
+  border: 1px solid #dbe2ea;
+  border-radius: 999px;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.66rem;
+  color: #94a3b8;
+  background: #f8fafc;
+  white-space: nowrap;
+}
+
+.invention-day-pill--active {
+  border-color: #16a34a;
+  background: #dcfce7;
+  color: #14532d;
+  font-weight: 700;
 }
 
 .invention-criterion-row--unique {
@@ -1249,18 +1312,18 @@ body {
 .invention-criterion-row--unique::after {
   content: attr(data-tooltip);
   position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
-  min-width: 180px;
-  max-width: 260px;
+  left: 0;
+  bottom: calc(100% + 6px);
+  min-width: 200px;
+  max-width: 300px;
   border-radius: 6px;
   border: 1px solid #1e3a8a;
   background: #0b1f44;
   color: #dbeafe;
   font-size: 0.68rem;
-  line-height: 1.25;
-  padding: 0.3rem 0.4rem;
+  line-height: 1.4;
+  white-space: pre-line;
+  padding: 0.35rem 0.5rem;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
@@ -1306,11 +1369,16 @@ body {
 .invention-type {
   border: 1px solid #cbd5e1;
   border-radius: 999px;
-  padding: 0.14rem 0.45rem;
-  font-size: 0.72rem;
+  padding: 0.1rem 0.28rem;
+  font-size: 0.8rem;
   color: #475569;
   background: #f8fafc;
   cursor: default;
+  line-height: 1;
+}
+
+.invention-type--unmarked {
+  opacity: 0.25;
 }
 
 .invention-type--hoverable {
@@ -1421,12 +1489,12 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
-  padding: 0.55rem;
+  padding: 0.4rem;
 }
 
 .workshop-card h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
+  margin: 0 0 0.2rem;
+  font-size: 0.72rem;
 }
 
 .workshop-id {
@@ -1437,9 +1505,8 @@ body {
 
 .workshop-grid-wrapper {
   position: relative;
-  width: 80%;
-  aspect-ratio: 1 / 1;
-  margin: 0 auto;
+  width: fit-content;
+  margin: 0;
 }
 
 .workshop-grid-lines {
@@ -1484,24 +1551,24 @@ body {
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: repeat(5, 1fr);
-  width: 100%;
-  height: 100%;
-  gap: 0.28rem;
+  grid-template-columns: repeat(5, 26px);
+  grid-template-rows: repeat(5, 26px);
+  gap: 2px;
+  width: fit-content;
+  height: fit-content;
 }
 
 .workshop-idea {
   position: absolute;
   transform: translate(-50%, -50%);
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   display: inline-grid;
   place-items: center;
-  font-size: 0.76rem;
+  font-size: 0.6rem;
   line-height: 1;
-  border: 2px solid #b8bec7;
+  border: 1.5px solid #b8bec7;
   background: #ffffff;
   color: #6b7280;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.16);
@@ -1526,7 +1593,7 @@ body {
   place-items: center;
   justify-self: center;
   align-self: center;
-  font-size: 1rem;
+  font-size: 0.68rem;
   font-weight: 700;
   color: #334155;
   padding: 0;
@@ -1652,7 +1719,8 @@ body {
   border-width: 5px !important;
   box-shadow: none !important;
   border-color: #0b0f19 !important;
-  color: #0f172a !important;
+  color: transparent !important;
+  font-size: 0 !important;
 }
 
 .workshop-cell--empty {
@@ -1814,18 +1882,19 @@ body {
 }
 
 .journals-container {
-  display: grid;
-  gap: 2rem;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  display: flex;
+  gap: 0.75rem;
 }
 
 .journal-card {
+  flex: 1;
+  min-width: 0;
   padding: 0;
 }
 
 .journal-card h3 {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.72rem;
 }
 
 .journal-title {
@@ -1842,14 +1911,14 @@ body {
 }
 
 .journal-idea-badge {
-  width: 1.08rem;
-  height: 1.08rem;
+  width: 0.85rem;
+  height: 0.85rem;
   border-radius: 999px;
   display: inline-grid;
   place-items: center;
-  font-size: 0.72rem;
+  font-size: 0.58rem;
   line-height: 1;
-  border: 2px solid #b8bec7;
+  border: 1.5px solid #b8bec7;
   background: #ffffff;
   color: #6b7280;
 }
@@ -1867,21 +1936,23 @@ body {
 }
 
 .journal-grid {
-  margin-top: 0.55rem;
+  margin-top: 0.3rem;
   display: grid;
-  grid-template-columns: repeat(2, 1fr) 8px repeat(2, 1fr);
-  grid-template-rows: repeat(2, 1fr) 8px repeat(2, 1fr);
+  grid-template-columns: repeat(2, 1fr) 4px repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr) 4px repeat(2, 1fr);
   aspect-ratio: 1 / 1;
+  width: 100%;
   border: none;
 }
 
 .journal-layout {
-  margin-top: 0.55rem;
+  margin-top: 0.3rem;
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 44px;
+  grid-template-columns: 1fr auto;
   column-gap: 0.3rem;
-  row-gap: 0.25rem;
+  row-gap: 0.2rem;
   align-items: stretch;
+  width: 100%;
 }
 
 .journal-column-wrenches {
@@ -1919,14 +1990,14 @@ body {
 }
 
 .wrench-token {
-  font-size: 0.86rem;
+  font-size: 0.72rem;
   line-height: 1;
   display: inline-grid;
   place-items: center;
-  min-height: 24px;
-  min-width: 24px;
+  min-height: 21px;
+  min-width: 21px;
   border: 1px solid #ddd;
-  border-radius: 6px;
+  border-radius: 5px;
   background: #fff;
 }
 
@@ -1958,7 +2029,7 @@ body {
   display: grid;
   place-items: center;
   border: 1px solid #ddd;
-  font-size: 0.9rem;
+  font-size: 0.72rem;
   background: #fff;
   padding: 0;
 }
@@ -2047,14 +2118,120 @@ button:disabled:hover {
   background: #f9fafb;
 }
 
+/* ── Collapsible log sidebar (fixed overlay on left) ─────────── */
 .log-sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  height: 100vh;
+  z-index: 50;
+  width: 280px;
   background: #f9f8f6;
   border-right: 1px solid var(--border);
-  padding: 2rem;
-  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  transition: width 0.22s ease;
+  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.1);
+}
+
+.log-sidebar.log-sidebar--collapsed {
+  width: 20px;
+  box-shadow: none;
+}
+
+/* Thin toggle strip on the left edge of the sidebar */
+.log-sidebar-toggle {
+  flex-shrink: 0;
+  width: 20px;
+  min-width: 20px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.75rem 0 0;
+  gap: 0.5rem;
+  color: rgba(0, 0, 0, 0.3);
+  font-size: 0.55rem;
+}
+
+.log-sidebar-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.log-sidebar-toggle-icon {
+  display: inline-block;
+  transition: transform 0.22s ease;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.log-sidebar--collapsed .log-sidebar-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.log-sidebar-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.56rem;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.28);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.log-sidebar:not(.log-sidebar--collapsed) .log-sidebar-label {
+  opacity: 0;
+}
+
+/* Inner content — fixed width so it doesn't reflow during collapse */
+.log-sidebar-inner {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+  min-height: 0;
   overflow: hidden;
+  transition: opacity 0.15s ease;
+}
+
+.log-sidebar--collapsed .log-sidebar-inner {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── Workspace top navigation bar ─────────────────────────────── */
+.workspace-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 0.65rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.workspace-back-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: rgba(0, 0, 0, 0.4);
+  padding: 0;
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.workspace-back-btn:hover {
+  color: rgba(0, 0, 0, 0.72);
 }
 
 .player-state-panel {
@@ -2578,17 +2755,17 @@ button:disabled:hover {
 
 .tool-grid {
   display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
 }
 
 .tool-card {
   border: 1px solid #cbd5e1;
-  border-radius: 0.7rem;
+  border-radius: 0.5rem;
   background: #f8fafc;
-  padding: 0.65rem 0.75rem;
+  padding: 0.35rem 0.45rem;
   display: grid;
-  gap: 0.45rem;
+  gap: 0.22rem;
   justify-items: start;
 }
 
@@ -2604,7 +2781,7 @@ button:disabled:hover {
 
 .tool-card__status {
   color: #475569;
-  font-size: 0.88rem;
+  font-size: 0.68rem;
 }
 
 .tool-card__shape {
@@ -2613,13 +2790,13 @@ button:disabled:hover {
 
 .tool-shape {
   display: grid;
-  gap: 3px;
-  grid-template-columns: repeat(var(--tool-shape-cols, 3), 12px);
+  gap: 1.5px;
+  grid-template-columns: repeat(var(--tool-shape-cols, 3), 11px);
 }
 
 .tool-shape-cell {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 999px;
   border: 0;
   background: transparent;
@@ -2636,8 +2813,8 @@ button:disabled:hover {
   position: absolute;
   left: calc(100% - 1px);
   top: 50%;
-  width: 8px;
-  height: 4px;
+  width: 5px;
+  height: 3px;
   transform: translateY(-50%);
   background: #334155;
 }
@@ -2647,16 +2824,16 @@ button:disabled:hover {
   position: absolute;
   top: calc(100% - 1px);
   left: 50%;
-  width: 4px;
-  height: 8px;
+  width: 3px;
+  height: 5px;
   transform: translateX(-50%);
   background: #334155;
 }
 
 .tool-card__ability {
   color: #334155;
-  font-size: 0.86rem;
-  line-height: 1.25;
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .invent-shape-preview {
@@ -2741,14 +2918,10 @@ button:disabled:hover {
   }
 
   .app {
+    flex-direction: column;
     height: auto;
     min-height: 100vh;
-    grid-template-columns: 1fr;
     overflow: visible;
-  }
-
-  .log-sidebar {
-    min-height: 40vh;
   }
 
   body {

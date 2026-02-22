@@ -214,57 +214,55 @@
       </main>
     </section>
     <main id="app-shell" class="app" style="display: none">
-      <aside class="log-sidebar" aria-label="Action log">
-        <section
-          id="player-state-panel"
-          class="player-state-panel"
-          aria-label="Player status"
+      <aside class="log-sidebar log-sidebar--collapsed" id="log-sidebar" aria-label="Action log">
+        <button
+          class="log-sidebar-toggle"
+          id="log-sidebar-toggle"
+          type="button"
+          aria-label="Expand action log"
+          aria-expanded="false"
         >
-          <h3 id="player-state-title">Snapshot</h3>
-          <div id="player-state-summary" class="player-state-summary"></div>
-          <div class="player-state-panel__actions">
-            <button id="back-to-lobby" type="button">Go Back to Lobby</button>
-            <button id="reset-game" type="button" class="button-destructive">
-              Abandon Game
-            </button>
+          <span class="log-sidebar-toggle-icon" aria-hidden="true">◀</span>
+          <span class="log-sidebar-label" aria-hidden="true">Chat &amp; game log</span>
+        </button>
+        <div class="log-sidebar-inner">
+          <div class="log-tab-hint">Hold <kbd class="kbd-tab">⇥ Tab</kbd> for game overview</div>
+          <div class="log-header">
+            <h2>Action Log</h2>
+            <div class="log-header-actions">
+              <button id="clear-log" type="button">Clear</button>
+            </div>
           </div>
-        </section>
-        <div class="log-tab-hint">Hold <kbd class="kbd-tab">⇥ Tab</kbd> for game overview</div>
-        <div class="log-header">
-          <h2>Action Log</h2>
-          <div class="log-header-actions">
-            <button id="clear-log" type="button">Clear</button>
-          </div>
-        </div>
-        <div class="log-filters">
-          <div
-            id="log-player-filter-tabs"
-            class="log-player-tabs"
-            role="tablist"
-            aria-label="Log player filter"
-          >
-            <button
-              type="button"
-              class="log-player-tab log-player-tab--active"
-              data-player-filter="all"
+          <div class="log-filters">
+            <div
+              id="log-player-filter-tabs"
+              class="log-player-tabs"
+              role="tablist"
+              aria-label="Log player filter"
             >
-              All
-            </button>
+              <button
+                type="button"
+                class="log-player-tab log-player-tab--active"
+                data-player-filter="all"
+              >
+                All
+              </button>
+            </div>
           </div>
+          <ul id="log-list" class="log-list"></ul>
         </div>
-        <ul id="log-list" class="log-list"></ul>
       </aside>
+      <!-- Hidden player-state-panel kept for JS compatibility -->
+      <section id="player-state-panel" class="player-state-panel" aria-hidden="true" style="display:none">
+        <div id="player-state-summary" class="player-state-summary"></div>
+      </section>
       <section class="workspace">
         <div class="workspace-head">
-          <h1 class="workspace-title">Unvention: International Exhibition</h1>
-          <div id="footer-breadcrumb" class="workspace-breadcrumb"></div>
-          <nav class="workspace-nav" aria-label="Section shortcuts">
-            <a href="#round-roll-panel">Roll</a>
-            <a href="#journals-panel">Journals</a>
-            <a href="#workshops-panel">Workshops</a>
-            <a href="#inventions-panel">Inventions</a>
-            <a href="#tools-panel">Tools</a>
-          </nav>
+          <div class="workspace-top-bar">
+            <button id="back-to-lobby" type="button" class="workspace-back-btn">← Back to lobby</button>
+            <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
+          </div>
+          <h1 class="workspace-title" id="workspace-title">Unvention</h1>
           <div class="workspace-actions">
             <div class="workspace-actions__left">
               <div id="phase-expectation" class="phase-expectation"></div>
@@ -282,64 +280,69 @@
           </div>
         </div>
 
+        <!-- Round roll kept hidden for JS compatibility -->
         <section
           id="round-roll-panel"
           class="round-roll-panel"
           aria-label="Current round roll"
+          style="display:none"
         >
           <h2 id="round-roll-title">Turn -: Dice Groups</h2>
           <div id="round-roll-container" class="round-roll-container"></div>
         </section>
-        <section
-          id="journals-panel"
-          class="journals-panel"
-          aria-label="Player journals"
-        >
-          <h2>Journals</h2>
-          <div
-            id="journals-player-tabs"
-            class="section-player-tabs"
-            aria-label="Journal player tabs"
-          ></div>
-          <div id="journals-container" class="journals-container"></div>
-        </section>
-        <section
-          id="workshops-panel"
-          class="workshops-panel"
-          aria-label="Player workshops"
-        >
-          <h2>Workshops</h2>
-          <div
-            id="workshops-player-tabs"
-            class="section-player-tabs"
-            aria-label="Workshop player tabs"
-          ></div>
-          <div id="workshops-container" class="workshops-container"></div>
-        </section>
-        <section
-          id="inventions-panel"
-          class="inventions-panel"
-          aria-label="Player inventions"
-        >
-          <h2>Inventions</h2>
-          <div
-            id="inventions-player-tabs"
-            class="section-player-tabs"
-            aria-label="Invention player tabs"
-          ></div>
-          <div id="inventions-container" class="inventions-container"></div>
-        </section>
-        <section id="tools-panel" class="tools-panel" aria-label="Player tools">
-          <h2>Tools</h2>
-          <div
-            id="tools-player-tabs"
-            class="section-player-tabs"
-            aria-label="Tool player tabs"
-          ></div>
-          <div id="tools-container" class="tools-container">
-            <p class="tools-placeholder">Tool interactions coming next.</p>
-          </div>
-        </section>
+
+        <div class="game-panels-grid">
+          <section
+            id="journals-panel"
+            class="journals-panel"
+            aria-label="Player journals"
+          >
+            <h2>Journals</h2>
+            <div
+              id="journals-player-tabs"
+              class="section-player-tabs"
+              aria-label="Journal player tabs"
+            ></div>
+            <div id="journals-container" class="journals-container"></div>
+          </section>
+          <section
+            id="inventions-panel"
+            class="inventions-panel"
+            aria-label="Player inventions"
+          >
+            <h2>Inventions</h2>
+            <div
+              id="inventions-player-tabs"
+              class="section-player-tabs"
+              aria-label="Invention player tabs"
+            ></div>
+            <div id="inventions-container" class="inventions-container"></div>
+          </section>
+          <section
+            id="workshops-panel"
+            class="workshops-panel"
+            aria-label="Player workshops"
+          >
+            <h2>Workshops</h2>
+            <div
+              id="workshops-player-tabs"
+              class="section-player-tabs"
+              aria-label="Workshop player tabs"
+            ></div>
+            <div id="workshops-container" class="workshops-container"></div>
+          </section>
+          <section id="tools-panel" class="tools-panel" aria-label="Player tools">
+            <h2>Tools</h2>
+            <div
+              id="tools-player-tabs"
+              class="section-player-tabs"
+              aria-label="Tool player tabs"
+            ></div>
+            <div id="tools-container" class="tools-container">
+              <p class="tools-placeholder">Tool interactions coming next.</p>
+            </div>
+          </section>
+        </div>
       </section>
 
       
