@@ -100,7 +100,7 @@ const httpServer = http.createServer((req, res) => {
     }
     const payload = buildProfilePayload(profileToken);
     if (!payload) {
-      sendJson(res, 404, { ok: false, error: "profile_not_found" });
+      sendJson(res, 200, { ok: false, error: "profile_not_found", serverTime: Date.now() });
       return;
     }
     sendJson(res, 200, payload);

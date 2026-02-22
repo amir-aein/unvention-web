@@ -2010,8 +2010,17 @@
     );
     try {
       const result = await fetchFirstJsonFromCandidates(candidates);
-      if (!result.ok) {
-        hubProfileError = String(result.error || "Could not load profile");
+      const payloadOk = result.ok && Boolean(result.payload?.ok);
+      if (!payloadOk) {
+        const errorCode = result.ok
+          ? String(result.payload?.error || "")
+          : result.error;
+        if (errorCode === "profile_not_found") {
+          hubProfileSummary = null;
+          hubProfileError = "";
+        } else {
+          hubProfileError = String(errorCode || "Could not load profile");
+        }
       } else {
         const payload = result.payload || {};
         hubProfileSummary = {
@@ -2181,13 +2190,11 @@
           "' data-action='hub-select-room' data-room-code='" + code + "'>" +
           "<span class='mp-hub-room-item__title'>" + roomDisplayName + "</span>" +
           "<span class='mp-hub-room-item__line'>" +
-          "<span class='mp-hub-room-item__meta'>" + escapeHtml(players) + " players</span>" +
           "<span class='mp-hub-room-item__pill-row'>" +
           "<span class='mp-room-status-pill mp-room-status-pill--" + escapeHtml(primaryPill.key) + "'>" + escapeHtml(primaryPill.label) + "</span>" +
           hostingPill +
           "</span>" +
           "</span>" +
-          "<span class='mp-hub-room-item__meta'>" + updatedAt + "</span>" +
           "</a>";
       }).join("");
     };
