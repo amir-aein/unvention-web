@@ -2797,3 +2797,419 @@ button:disabled:hover {
     max-height: 240px;
   }
 }
+
+/* ── Tab HUD Overlay ─────────────────────────────────────────── */
+
+.game-hud-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #f9f8f6;
+  display: none;
+  flex-direction: column;
+  padding: 2rem 2.5rem;
+  gap: 1.5rem;
+  overflow: auto;
+}
+
+.game-hud-overlay__header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+
+.game-hud-overlay__title {
+  font-family: "Noto Serif", serif;
+  font-size: 1.3rem;
+  font-weight: 500;
+  color: #0c0a08;
+  letter-spacing: -0.02em;
+}
+
+.game-hud-overlay__hint {
+  font-size: 0.8rem;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+/* Player columns container */
+.game-hud-players {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+  flex: 1;
+  overflow-x: auto;
+}
+
+/* One card per player */
+.hud-player-card {
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 420px;
+  flex: 1;
+}
+
+/* Two-column body: workshops left, inventions+tools right */
+.hud-player-body {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+}
+
+.hud-col-left {
+  flex-shrink: 0;
+}
+
+.hud-col-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+/* 2×2 workshop grid (mirrors normal view positions) */
+.hud-workshops-2x2 {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 0.75rem;
+}
+
+/* Horizontal row of inventions in right column */
+.hud-inventions-list {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: flex-start;
+}
+
+/* Player name + stats header */
+.hud-player-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.hud-player-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #0c0a08;
+}
+
+.hud-player-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  color: rgba(0, 0, 0, 0.75);
+  align-items: center;
+}
+
+/* Wrenches pill */
+.hud-wrenches-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.03);
+  font-size: 0.82rem;
+}
+
+.hud-wrenches-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: rgba(0, 0, 0, 0.38);
+}
+
+.hud-wrenches-value {
+  color: rgba(0, 0, 0, 0.75);
+  letter-spacing: 0.02em;
+}
+
+.hud-wrenches-none {
+  color: rgba(0, 0, 0, 0.3);
+  font-style: italic;
+  font-size: 0.78rem;
+}
+
+/* Section */
+.hud-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hud-section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(0, 0, 0, 0.38);
+}
+
+.hud-section-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+/* ── Workshop grid in HUD ── */
+.workshop-hud-wrapper {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.workshop-hud-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 20px);
+  gap: 2px;
+}
+
+.workshop-hud-cell {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.workshop-hud-cell--filled {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.workshop-hud-cell--circled {
+  background: #0c0a08;
+}
+
+.workshop-hud-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.game-hud-overlay .workshop-line--committed {
+  stroke: #0c0a08;
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+.game-hud-overlay .workshop-line--draft {
+  stroke: #22c55e;
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+/* ── Invention mini in HUD ── */
+.invention-hud-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+}
+
+.invention-hud-criterion {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.invention-hud-description {
+  font-size: 0.62rem;
+  color: rgba(0, 0, 0, 0.4);
+  line-height: 1.3;
+}
+
+.invention-hud-grid-container {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.invent-hud-pattern {
+  display: inline-grid;
+  gap: 2px;
+}
+
+.invention-hud-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.invention-hud-line {
+  stroke: #0c0a08;
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+.game-hud-overlay .mechanism-tooltip__cell {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.game-hud-overlay .mechanism-tooltip__cell--open {
+  border-color: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.game-hud-overlay .mechanism-tooltip__cell--void {
+  background: transparent;
+  border-color: transparent;
+}
+
+.game-hud-overlay .mechanism-tooltip__cell--highlight {
+  border-color: #0c0a08;
+  background: #0c0a08;
+}
+
+/* ── Wrench tokens in HUD ── */
+.hud-wrench-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.hud-wrench-token {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.hud-wrench-count {
+  font-size: 0.82rem;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* Idea tokens: circular chip per captured idea */
+.hud-idea-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.hud-idea-token {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+/* ── Tool items in HUD ── */
+.hud-tool-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 140px;
+}
+
+.hud-tool-ability {
+  font-size: 0.72rem;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.35;
+}
+
+.hud-tools-locked .hud-tool-ability {
+  color: rgba(0, 0, 0, 0.3);
+}
+
+.tool-shape--mini {
+  grid-template-columns: repeat(var(--tool-shape-cols, 3), 14px);
+  gap: 2px;
+}
+
+.tool-shape--mini .tool-shape-cell {
+  width: 14px;
+  height: 14px;
+}
+
+.tool-shape--mini .tool-shape-cell--filled {
+  background: #0c0a08;
+  border-color: #0c0a08;
+}
+
+.hud-tools-locked .tool-shape--mini .tool-shape-cell--filled {
+  background: rgba(0, 0, 0, 0.2);
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+.tool-shape--mini .tool-shape-cell--edge-right::after {
+  width: 7px;
+  height: 6px;
+  background: #0c0a08;
+}
+
+.hud-tools-locked .tool-shape--mini .tool-shape-cell--edge-right::after {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.tool-shape--mini .tool-shape-cell--edge-down::before {
+  width: 6px;
+  height: 7px;
+  background: #0c0a08;
+}
+
+.hud-tools-locked .tool-shape--mini .tool-shape-cell--edge-down::before {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* ── Log sidebar Tab hint ── */
+.log-tab-hint {
+  padding: 0.75rem 1rem;
+  font-size: 0.78rem;
+  color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(0, 0, 0, 0.04);
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.kbd-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.5rem;
+  background: #f9f8f6;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+}

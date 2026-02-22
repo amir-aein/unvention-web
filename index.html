@@ -229,6 +229,7 @@
             </button>
           </div>
         </section>
+        <div class="log-tab-hint">Hold <kbd class="kbd-tab">⇥ Tab</kbd> for game overview</div>
         <div class="log-header">
           <h2>Action Log</h2>
           <div class="log-header-actions">
@@ -343,6 +344,20 @@
 
       
     </main>
+    <div
+      id="game-hud-overlay"
+      class="game-hud-overlay"
+      role="dialog"
+      aria-label="Game overview"
+      aria-modal="true"
+      style="display: none"
+    >
+      <div class="game-hud-overlay__header">
+        <span class="game-hud-overlay__title">Game Overview</span>
+        <span class="game-hud-overlay__hint">Release Tab to close</span>
+      </div>
+      <div id="game-hud-players" class="game-hud-players"></div>
+    </div>
     <section
       id="auth-display-name-modal"
       class="auth-display-name-modal"

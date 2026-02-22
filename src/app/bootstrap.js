@@ -94,6 +94,7 @@
 
   root.createLogSidebar(loggerService);
   let activePlayerId = "P1";
+  let lastHudState = null;
   let multiplayerState = loadMultiplayerState();
   let waitingForRoomTurnAdvance = false;
   let appliedServerTurnKey = "";
@@ -4590,6 +4591,7 @@
         undoButton.disabled = undoStack.length === 0;
       }
       renderPhaseControls(withAutoWorkshopState);
+      lastHudState = withAutoWorkshopState;
       renderPlayerStatePanel(withAutoWorkshopState);
       renderRoundRoll(withAutoWorkshopState);
       renderJournals(journalsView.state, journalsView.player, journalsView);
@@ -5261,6 +5263,204 @@
       "</tr></thead>" +
       "<tbody>" + rows + "</tbody>" +
       "</table>";
+  }
+
+  function renderGameHudOverlay() {
+    const container = document.getElementById("game-hud-players");
+    if (!container || !lastHudState) {
+      return;
+    }
+    const state = lastHudState;
+    const playerIds = getOrderedPlayerIdsForView(state);
+    const catalog = typeof roundEngineService.getActiveTools === "function"
+      ? roundEngineService.getActiveTools(activePlayerId)
+      : [];
+    const columns = playerIds.map(function (playerId) {
+      const snapshot = getPlayerSnapshotForView(state, playerId);
+      const player = snapshot.player;
+      const isYou = playerId === String(activePlayerId || "");
+      const name = resolvePlayerName(playerId, { preferYou: false }) || playerId;
+      const score = player ? Number(player.totalScore || 0) : 0;
+      const wrenchCount = player ? (Number(computeAvailableWrenchesFromSnapshot(player)) || 0) : 0;
+      const completedJournals = player ? Number(player.completedJournals || 0) : 0;
+
+      // Wrenches pill with label — shows 'none' when count is 0
+      const wrenchDisplay = wrenchCount === 0
+        ? '<span class="hud-wrenches-none">none</span>'
+        : (wrenchCount <= 8
+          ? '<span class="hud-wrenches-value">' + "🔧".repeat(wrenchCount) + "</span>"
+          : '<span class="hud-wrenches-value">🔧×' + wrenchCount + "</span>");
+      const wrenchPillHtml = '<div class="hud-wrenches-pill"><span class="hud-wrenches-label">Wrenches</span>' + wrenchDisplay + "</div>";
+
+      // Workshops with mechanism line SVG overlay
+      const workshops = Array.isArray(player && player.workshops) ? player.workshops : [];
+      const wsHtml = workshops.map(function (ws) {
+        const cells = (ws.cells || []).map(function (row) {
+          return (Array.isArray(row) ? row : []).map(function (cell) {
+            let cls = "workshop-hud-cell";
+            if (cell.circled) {
+              cls += " workshop-hud-cell--circled";
+            } else if (cell.kind === "number" || cell.kind === "wild") {
+              cls += " workshop-hud-cell--filled";
+            }
+            return '<span class="' + cls + '"></span>';
+          }).join("");
+        }).join("");
+        const mechSvg = player
+          ? renderWorkshopMechanismLines(state, player, ws.id, playerId)
+          : "";
+        const overlaidSvg = mechSvg
+          ? mechSvg.replace("<svg ", '<svg class="workshop-hud-lines" ')
+          : "";
+        return (
+          '<div class="workshop-hud-wrapper">' +
+          '<div class="workshop-hud-grid">' + cells + "</div>" +
+          overlaidSvg +
+          "</div>"
+        );
+      }).join("");
+
+      // Inventions: pattern (circles + connecting lines), criterion below, idea icons below
+      const inventionData = Array.isArray(player && player.inventions) ? player.inventions : [];
+      const iHtml = inventionData.map(function (inv) {
+        const patternRows = Array.isArray(inv.pattern) ? inv.pattern.map(String) : [];
+        const numRows = patternRows.length;
+        const numCols = patternRows.reduce(function (m, r) { return Math.max(m, r.length); }, 1);
+        const placementKeys = new Set(
+          (Array.isArray(inv.placements) ? inv.placements : [])
+            .flatMap(function (p) { return Array.isArray(p.cells) ? p.cells : []; })
+            .map(function (c) { return String(Number(c.row)) + ":" + String(Number(c.col)); })
+        );
+        const miniResult = renderInventionMiniPattern(inv.pattern, placementKeys);
+        const criterionKey = String(inv.criterionLabel || "");
+        const criterion = escapeHtml(criterionKey);
+        const criterionDesc = escapeHtml(
+          typeof getUniqueCriterionDescription === "function"
+            ? String(getUniqueCriterionDescription(criterionKey) || "")
+            : ""
+        );
+        const ideasCount = Number(inv.ideasCaptured || 0);
+
+        // SVG lines connecting adjacent placed cells (cell 12px, gap 2px → pitch 14px)
+        const cellPitch = 14;
+        const cellCenter = 6;
+        const gridW = numCols * cellPitch - 2;
+        const gridH = numRows * cellPitch - 2;
+        const lineSegments = [];
+        placementKeys.forEach(function (key) {
+          const parts = key.split(":");
+          const row = Number(parts[0]);
+          const col = Number(parts[1]);
+          if (placementKeys.has(String(row) + ":" + String(col + 1))) {
+            lineSegments.push({ x1: col * cellPitch + cellCenter, y1: row * cellPitch + cellCenter, x2: (col + 1) * cellPitch + cellCenter, y2: row * cellPitch + cellCenter });
+          }
+          if (placementKeys.has(String(row + 1) + ":" + String(col))) {
+            lineSegments.push({ x1: col * cellPitch + cellCenter, y1: row * cellPitch + cellCenter, x2: col * cellPitch + cellCenter, y2: (row + 1) * cellPitch + cellCenter });
+          }
+        });
+        const invSvgHtml = lineSegments.length > 0
+          ? '<svg class="invention-hud-lines" width="' + gridW + '" height="' + gridH + '">' +
+            lineSegments.map(function (s) {
+              return '<line class="invention-hud-line" x1="' + s.x1 + '" y1="' + s.y1 + '" x2="' + s.x2 + '" y2="' + s.y2 + '" vector-effect="non-scaling-stroke"></line>';
+            }).join("") + "</svg>"
+          : "";
+
+        // Idea icons: one chip per captured idea
+        let ideaTokensHtml = "";
+        if (ideasCount > 0) {
+          const chips = ideasCount <= 12
+            ? new Array(ideasCount).fill('<span class="hud-idea-token">💡</span>').join("")
+            : '<span class="hud-idea-token">💡</span><span class="hud-wrench-count">×' + ideasCount + "</span>";
+          ideaTokensHtml = '<div class="hud-idea-tokens">' + chips + "</div>";
+        }
+
+        return (
+          '<div class="invention-hud-wrapper">' +
+          '<div class="invention-hud-grid-container">' +
+          '<span class="invent-hud-pattern" style="grid-template-columns:repeat(' + miniResult.cols + ',12px)">' + miniResult.html + "</span>" +
+          invSvgHtml +
+          "</div>" +
+          (criterion ? '<div class="invention-hud-criterion">' + criterion + "</div>" : "") +
+          (criterionDesc ? '<div class="invention-hud-description">' + criterionDesc + "</div>" : "") +
+          ideaTokensHtml +
+          "</div>"
+        );
+      }).join("");
+
+      // Tools: unlocked first (with ability text), then locked (with ability text)
+      const unlockedById = new Set(
+        (Array.isArray(player && player.unlockedTools) ? player.unlockedTools : [])
+          .map(function (t) { return String((t && t.id) || ""); })
+      );
+      const unlockedTools = catalog.filter(function (t) { return unlockedById.has(String(t.id || "")); });
+      const lockedTools = catalog.filter(function (t) { return !unlockedById.has(String(t.id || "")); });
+
+      function hudToolHtml(tool) {
+        const shape = renderToolShape(tool.pattern);
+        const miniHtml = shape.html.replace('class="tool-shape"', 'class="tool-shape tool-shape--mini"');
+        const ability = escapeHtml(String(tool.abilityText || "").trim());
+        return (
+          '<div class="hud-tool-item">' +
+          miniHtml +
+          (ability ? '<div class="hud-tool-ability">' + ability + "</div>" : "") +
+          "</div>"
+        );
+      }
+
+      const unlockedHtml = unlockedTools.map(hudToolHtml).join("");
+      const lockedHtml = lockedTools.map(hudToolHtml).join("");
+      const toolsHtml = (
+        (unlockedHtml ? '<div class="hud-tools-section hud-tools-unlocked"><div class="hud-section-label">Unlocked Tools</div><div class="hud-section-row">' + unlockedHtml + "</div></div>" : "") +
+        (lockedHtml ? '<div class="hud-tools-section hud-tools-locked"><div class="hud-section-label">Locked Tools</div><div class="hud-section-row">' + lockedHtml + "</div></div>" : "")
+      );
+
+      return (
+        '<div class="hud-player-card">' +
+        '<div class="hud-player-header">' +
+        '<div class="hud-player-name">' + escapeHtml(name) + (isYou ? " <span style='font-weight:400;font-size:0.78rem;color:rgba(0,0,0,0.4)'>you</span>" : "") + "</div>" +
+        '<div class="hud-player-stats">' +
+        "<span>★ " + score + "</span>" +
+        wrenchPillHtml +
+        "<span>📓 " + completedJournals + "/3</span>" +
+        "</div>" +
+        "</div>" +
+        '<div class="hud-player-body">' +
+        '<div class="hud-col-left">' +
+        (wsHtml ? '<div class="hud-section"><div class="hud-section-label">Workshops</div><div class="hud-workshops-2x2">' + wsHtml + "</div></div>" : "") +
+        "</div>" +
+        '<div class="hud-col-right">' +
+        (iHtml ? '<div class="hud-section"><div class="hud-section-label">Inventions</div><div class="hud-inventions-list">' + iHtml + "</div></div>" : "") +
+        (toolsHtml ? '<div class="hud-section">' + toolsHtml + "</div>" : "") +
+        "</div>" +
+        "</div>" +
+        "</div>"
+      );
+    }).join("");
+    container.innerHTML = columns;
+  }
+
+  function isGameActive() {
+    const appShell = document.getElementById("app-shell");
+    return Boolean(appShell && appShell.style.display !== "none");
+  }
+
+  function showGameHud() {
+    if (!isGameActive()) {
+      return;
+    }
+    const overlay = document.getElementById("game-hud-overlay");
+    if (!overlay) {
+      return;
+    }
+    renderGameHudOverlay();
+    overlay.style.display = "flex";
+  }
+
+  function hideGameHud() {
+    const overlay = document.getElementById("game-hud-overlay");
+    if (overlay) {
+      overlay.style.display = "none";
+    }
   }
 
   function renderToolsPanel(_state, player, viewInput) {
@@ -7071,5 +7271,28 @@
       });
     });
   }
+  document.addEventListener("keydown", function onHudKeydown(event) {
+    if (String(event && event.key || "") !== "Tab") {
+      return;
+    }
+    event.preventDefault();
+    showGameHud();
+  });
+
+  document.addEventListener("keyup", function onHudKeyup(event) {
+    if (String(event && event.key || "") !== "Tab") {
+      return;
+    }
+    hideGameHud();
+  });
+
+  window.addEventListener("blur", hideGameHud);
+
+  document.addEventListener("visibilitychange", function onHudVisibilityChange() {
+    if (document.hidden) {
+      hideGameHud();
+    }
+  });
+
   renderState();
 })(typeof window !== "undefined" ? window : globalThis);
