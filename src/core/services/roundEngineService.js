@@ -516,13 +516,23 @@
       }
 
       const groups = Array.isArray(rollState.groups) ? rollState.groups : [];
-      return groups
+      const options = groups
         .map((groupValues, index) => ({
           key: "group-" + String(index),
           label: groupValues.join(", "),
           values: [...groupValues],
         }))
         .filter((option) => option.key !== context.excludedGroupKey);
+      const existingSelection = state.workshopSelections?.[playerId];
+      const hasPlacedPart = Number(existingSelection?.placementsThisTurn || 0) > 0;
+      if (!hasPlacedPart) {
+        return options;
+      }
+      const lockedKey = String(existingSelection?.selectedGroupKey || "");
+      if (!lockedKey) {
+        return [];
+      }
+      return options.filter((option) => option.key === lockedKey);
     }
 
     getAvailableWrenches(playerId) {
@@ -751,6 +761,15 @@
       if (state.phase !== "workshop") {
         return state;
       }
+      const existing = state.workshopSelections?.[playerId] || {};
+      const hasPlacedPart = Number(existing.placementsThisTurn || 0) > 0;
+      if (hasPlacedPart) {
+        this.loggerService.logEvent("warn", "Workshop group is locked after placing a part", {
+          playerId,
+          selectedGroupKey: existing.selectedGroupKey || null,
+        });
+        return state;
+      }
       const options = this.getWorkshoppingOptions(playerId);
       const selected = options.find((option) => option.key === selectionKey);
       if (!selected) {
@@ -762,7 +781,6 @@
       }
 
       const selections = { ...(state.workshopSelections || {}) };
-      const existing = selections[playerId] || {};
       selections[playerId] = {
         ...existing,
         selectedGroupKey: selected.key,
@@ -874,6 +892,7 @@
       const existing = selections[playerId] || {};
       selections[playerId] = {
         ...existing,
+        placementsThisTurn: Number(existing.placementsThisTurn || 0) + 1,
         wrenchPickPending: false,
       };
       const updated = this.gameStateService.update({
@@ -1475,6 +1494,28 @@
       };
     }
 
+    getMechanismAnchorPoint(pointsInput) {
+      const points = Array.isArray(pointsInput) ? pointsInput : [];
+      if (points.length === 0) {
+        return { row: 0, col: 0 };
+      }
+      const centerRow =
+        points.reduce((sum, point) => sum + Number(point.row || 0), 0) /
+        points.length;
+      const centerCol =
+        points.reduce((sum, point) => sum + Number(point.col || 0), 0) /
+        points.length;
+      return points.reduce((best, point) => {
+        const row = Number(point.row || 0);
+        const col = Number(point.col || 0);
+        const distance = Math.abs(row - centerRow) + Math.abs(col - centerCol);
+        if (!best || distance < best.distance) {
+          return { row, col, distance };
+        }
+        return best;
+      }, null) || { row: 0, col: 0, distance: 0 };
+    }
+
     isInventionPatternOpen(invention, row, col) {
       const rows = Array.isArray(invention?.pattern) ? invention.pattern.map((item) => String(item)) : [];
       if (row < 0 || col < 0 || row >= rows.length) {
@@ -1511,9 +1552,10 @@
       }
       const baseRow = Number(anchorRow);
       const baseCol = Number(anchorCol);
+      const anchorPoint = this.getMechanismAnchorPoint(points);
       const placementCells = points.map((point) => ({
-        row: baseRow + Number(point.row),
-        col: baseCol + Number(point.col),
+        row: baseRow + Number(point.row) - Number(anchorPoint.row || 0),
+        col: baseCol + Number(point.col) - Number(anchorPoint.col || 0),
       }));
       const occupied = new Set(
         (Array.isArray(invention.placements) ? invention.placements : [])

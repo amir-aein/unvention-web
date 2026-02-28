@@ -179,13 +179,18 @@
             class="mp-setup"
             style="display: none"
           >
-
             <h3 id="mp-hub-room-title">Select a room</h3>
             <p id="mp-hub-room-meta" class="mp-status-line">
               Pick a room from the sidebar.
             </p>
             <div class="mp-setup__buttons">
-              <button id="home-room-open" type="button" class="mp-setup__buttons">Primary Action</button>
+              <button
+                id="home-room-open"
+                type="button"
+                class="mp-setup__buttons"
+              >
+                Primary Action
+              </button>
               <button
                 id="home-room-abandon"
                 type="button"
@@ -214,7 +219,11 @@
       </main>
     </section>
     <main id="app-shell" class="app" style="display: none">
-      <aside class="log-sidebar log-sidebar--collapsed" id="log-sidebar" aria-label="Action log">
+      <aside
+        class="log-sidebar log-sidebar--collapsed"
+        id="log-sidebar"
+        aria-label="Action log"
+      >
         <button
           class="log-sidebar-toggle"
           id="log-sidebar-toggle"
@@ -223,10 +232,14 @@
           aria-expanded="false"
         >
           <span class="log-sidebar-toggle-icon" aria-hidden="true">◀</span>
-          <span class="log-sidebar-label" aria-hidden="true">Chat &amp; game log</span>
+          <span class="log-sidebar-label" aria-hidden="true"
+            >Chat &amp; game log</span
+          >
         </button>
         <div class="log-sidebar-inner">
-          <div class="log-tab-hint">Hold <kbd class="kbd-tab">⇥ Tab</kbd> for game overview</div>
+          <div class="log-tab-hint">
+            Hold <kbd class="kbd-tab">⇥ Tab</kbd> for game overview
+          </div>
           <div class="log-header">
             <h2>Action Log</h2>
             <div class="log-header-actions">
@@ -253,16 +266,41 @@
         </div>
       </aside>
       <!-- Hidden player-state-panel kept for JS compatibility -->
-      <section id="player-state-panel" class="player-state-panel" aria-hidden="true" style="display:none">
+      <section
+        id="player-state-panel"
+        class="player-state-panel"
+        aria-hidden="true"
+        style="display: none"
+      >
         <div id="player-state-summary" class="player-state-summary"></div>
       </section>
       <section class="workspace">
         <div class="workspace-head">
           <div class="workspace-top-bar">
-            <button id="back-to-lobby" type="button" class="workspace-back-btn">← Back to lobby</button>
-            <button id="reset-game" type="button" class="button-destructive">Abandon Game</button>
+            <button id="back-to-lobby" type="button" class="workspace-back-btn">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M8.5 2L3.5 7L8.5 12"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              Back to lobby
+            </button>
+            <h1 class="workspace-title" id="workspace-title">Unvention</h1>
+            <button id="reset-game" type="button" class="button-destructive">
+              Abandon Game
+            </button>
           </div>
-          <h1 class="workspace-title" id="workspace-title">Unvention</h1>
+
           <div class="workspace-actions">
             <div class="workspace-actions__left">
               <div id="phase-expectation" class="phase-expectation"></div>
@@ -285,7 +323,7 @@
           id="round-roll-panel"
           class="round-roll-panel"
           aria-label="Current round roll"
-          style="display:none"
+          style="display: none"
         >
           <h2 id="round-roll-title">Turn -: Dice Groups</h2>
           <div id="round-roll-container" class="round-roll-container"></div>
@@ -323,7 +361,9 @@
             class="workshops-panel"
             aria-label="Player workshops"
           >
-            <h2>Workshops</h2>
+            <h2 id="workshops-panel-title" class="workshops-panel-title">
+              Workshops
+            </h2>
             <div
               id="workshops-player-tabs"
               class="section-player-tabs"
@@ -331,7 +371,11 @@
             ></div>
             <div id="workshops-container" class="workshops-container"></div>
           </section>
-          <section id="tools-panel" class="tools-panel" aria-label="Player tools">
+          <section
+            id="tools-panel"
+            class="tools-panel"
+            aria-label="Player tools"
+          >
             <h2>Tools</h2>
             <div
               id="tools-player-tabs"
@@ -344,23 +388,34 @@
           </section>
         </div>
       </section>
-
-      
     </main>
+    <!-- Round start dice reveal modal -->
     <div
-      id="game-hud-overlay"
-      class="game-hud-overlay"
+      id="round-start-modal"
+      class="round-start-modal"
       role="dialog"
-      aria-label="Game overview"
       aria-modal="true"
+      aria-labelledby="round-start-modal-title"
       style="display: none"
     >
-      <div class="game-hud-overlay__header">
-        <span class="game-hud-overlay__title">Game Overview</span>
-        <span class="game-hud-overlay__hint">Release Tab to close</span>
+      <div class="round-start-modal__card">
+        <div id="round-start-modal-body" class="round-start-modal__body">
+          <span class="round-start-modal__spinner" aria-hidden="true"></span>
+          <span id="round-start-modal-title" class="round-start-modal__label"
+            >Rolling…</span
+          >
+        </div>
+        <button
+          id="round-start-modal-continue"
+          class="round-start-modal__continue"
+          type="button"
+          style="display: none"
+        >
+          Continue
+        </button>
       </div>
-      <div id="game-hud-players" class="game-hud-players"></div>
     </div>
+
     <section
       id="auth-display-name-modal"
       class="auth-display-name-modal"

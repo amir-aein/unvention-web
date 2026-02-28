@@ -26,6 +26,28 @@ const MAX_PROFILE_HISTORY_ENTRIES = 4000;
 const MAX_PROFILE_ROOM_ENTRIES = 30;
 const DEFAULT_HISTORY_LIMIT = 150;
 const MAX_HISTORY_LIMIT = 1000;
+const ROOM_AWARD_PEOPLE = [
+  { name: "Marie Curie", emoji: "⚛︎" },
+  { name: "Thomas Edison", emoji: "💡" },
+  { name: "Alan Turing", emoji: "💻" },
+  { name: "Katherine Johnson", emoji: "🛰️" },
+  { name: "Rosalind Franklin", emoji: "🧬" },
+  { name: "Nikola Tesla", emoji: "⚡" },
+  { name: "Tu Youyou", emoji: "🧪" },
+  { name: "Grace Hopper", emoji: "🖥️" },
+  { name: "Vera Rubin", emoji: "🔭" },
+  { name: "John Bardeen", emoji: "🔬" },
+  { name: "Chien-Shiung Wu", emoji: "⚛︎" },
+  { name: "Dorothy Hodgkin", emoji: "🧫" },
+  { name: "Frances Arnold", emoji: "🧪" },
+  { name: "Jennifer Doudna", emoji: "🧬" },
+  { name: "Katalin Kariko", emoji: "💉" },
+  { name: "Donna Strickland", emoji: "🔦" },
+  { name: "Shirley Ann Jackson", emoji: "📡" },
+  { name: "Hedy Lamarr", emoji: "📶" },
+  { name: "Tim Berners-Lee", emoji: "🌐" },
+  { name: "Emmy Noether", emoji: "📐" },
+];
 const SUPABASE_SYNC = createSupabaseSync({
   url: process.env.SUPABASE_URL,
   secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -276,6 +298,7 @@ function onCreateRoom(ws, message) {
   });
   const room = {
     code: roomCode,
+    displayName: pickRandomRoomAward(roomCode),
     status: "lobby",
     maxPlayers: MAX_PLAYERS,
     hostPlayerId: player.playerId,
@@ -1041,6 +1064,7 @@ function sendRoomStateToConnection(ws) {
 function serializeRoom(room) {
   return {
     code: room.code,
+    displayName: String(room.displayName || ""),
     status: room.status,
     maxPlayers: room.maxPlayers,
     hostPlayerId: room.hostPlayerId,
@@ -1257,6 +1281,51 @@ function generateRoomCode() {
     attempt += 1;
   }
   return randomId(6).toUpperCase();
+}
+
+function pickRandomRoomAward(roomCodeInput) {
+  const people = Array.isArray(ROOM_AWARD_PEOPLE) ? ROOM_AWARD_PEOPLE : [];
+  if (people.length === 0) {
+    return "⚛︎ Marie Curie Award";
+  }
+  const usedNames = new Set(
+    Array.from(rooms.values())
+      .map((room) => String(room?.displayName || "").trim())
+      .filter(Boolean),
+  );
+  const roomCode = String(roomCodeInput || "").trim().toUpperCase();
+  let hash = 2166136261;
+  for (let index = 0; index < roomCode.length; index += 1) {
+    hash ^= roomCode.charCodeAt(index);
+    hash +=
+      (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  const startIndex =
+    roomCode.length > 0 ? (hash >>> 0) % people.length : 0;
+  for (let probe = 0; probe < people.length; probe += 1) {
+    const item = people[(startIndex + probe) % people.length] || {};
+    const baseName =
+      String(item?.emoji || "⚛︎") +
+      " " +
+      String(item?.name || "Marie Curie") +
+      " Award";
+    if (!usedNames.has(baseName)) {
+      return baseName;
+    }
+  }
+  const fallback = people[startIndex % people.length] || {};
+  const baseName =
+    String(fallback?.emoji || "⚛︎") +
+    " " +
+    String(fallback?.name || "Marie Curie") +
+    " Award";
+  let suffix = 2;
+  let candidate = baseName + " " + String(suffix);
+  while (usedNames.has(candidate)) {
+    suffix += 1;
+    candidate = baseName + " " + String(suffix);
+  }
+  return candidate;
 }
 
 function sanitizeName(input, fallback) {
@@ -1520,6 +1589,7 @@ function normalizeProfileRoomEntry(entryInput) {
   }
   return {
     roomCode,
+    roomDisplayName: String(entryInput.roomDisplayName || "").trim().slice(0, 96),
     playerId: String(entryInput.playerId || "").trim(),
     playerName: sanitizeName(entryInput.playerName || "Player", "Player"),
     roomStatus: String(entryInput.roomStatus || "unknown").slice(0, 32),
@@ -1541,6 +1611,10 @@ function trackProfileRoomVisit(profileIdInput, roomCodeInput, detailsInput) {
     return;
   }
   const details = detailsInput && typeof detailsInput === "object" ? detailsInput : {};
+  const liveRoom = rooms.get(roomCode) || null;
+  const roomDisplayName = String(
+    details.roomDisplayName || liveRoom?.displayName || "",
+  ).trim();
   touchProfile(profile, {
     displayName: details.playerName || profile.displayName,
   });
@@ -1556,6 +1630,7 @@ function trackProfileRoomVisit(profileIdInput, roomCodeInput, detailsInput) {
     if (details.playerName) {
       existing.playerName = sanitizeName(details.playerName, existing.playerName || profile.displayName || "Player");
     }
+    existing.roomDisplayName = roomDisplayName || String(existing.roomDisplayName || "");
     if (details.roomStatus) {
       existing.roomStatus = String(details.roomStatus).slice(0, 32);
     }
@@ -1569,6 +1644,7 @@ function trackProfileRoomVisit(profileIdInput, roomCodeInput, detailsInput) {
   } else {
     profile.rooms.push({
       roomCode,
+      roomDisplayName,
       playerId: String(details.playerId || ""),
       playerName: sanitizeName(details.playerName || profile.displayName || "Player", "Player"),
       roomStatus: String(details.roomStatus || "active").slice(0, 32),
@@ -1592,6 +1668,7 @@ function archiveRoom(room, reason) {
   }
   roomArchiveByCode.set(room.code, {
     code: room.code,
+    displayName: String(room.displayName || ""),
     status: room.status,
     finalReason: String(reason || ""),
     hostPlayerId: room.hostPlayerId,
@@ -1835,6 +1912,7 @@ function buildRoomHistoryPayload(roomCodeInput, beforeSequence, limit) {
 function summarizeRoom(room) {
   return {
     code: room.code,
+    displayName: String(room.displayName || ""),
     status: room.status,
     hostPlayerId: room.hostPlayerId,
     playerCount: Array.isArray(room.players) ? room.players.length : 0,
@@ -1922,6 +2000,7 @@ function listActiveRoomsForProfile(profileIdInput) {
       }
       return {
         roomCode: room.code,
+        roomDisplayName: String(room.displayName || ""),
         roomStatus: room.status,
         playerId: me.playerId,
         playerName: me.name,
@@ -2248,6 +2327,7 @@ function buildRoomDirectoryPayload() {
   const roomList = Array.from(rooms.values())
     .map((room) => ({
       code: room.code,
+      displayName: String(room.displayName || ""),
       status: room.status,
       playerCount: Array.isArray(room.players) ? room.players.length : 0,
       maxPlayers: Number(room.maxPlayers || MAX_PLAYERS),
