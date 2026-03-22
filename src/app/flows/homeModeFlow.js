@@ -18,6 +18,10 @@
     const renderMultiplayerUi = deps.renderMultiplayerUi;
     const refreshRoomDirectory = deps.refreshRoomDirectory;
     const refreshPlayerHub = deps.refreshPlayerHub || refreshRoomDirectory;
+    const beginSidebarRefreshPending =
+      typeof deps.beginSidebarRefreshPending === "function"
+        ? deps.beginSidebarRefreshPending
+        : function fallbackBeginSidebarRefreshPending() {};
     const resetLocalMultiplayerMemory =
       typeof deps.resetLocalMultiplayerMemory === "function"
         ? deps.resetLocalMultiplayerMemory
@@ -62,7 +66,7 @@
       gameStateService.update({ gameStarted: false });
       multiplayerState.roomCode = requestedRoomCode;
       persistMultiplayerState();
-      setHomeStep("room-list");
+      beginSidebarRefreshPending("Updating rooms...");
       renderMultiplayerUi();
       await ensureMultiplayerConnection();
       const payload = {
@@ -93,10 +97,10 @@
           multiplayerState.name = getDefaultPlayerName();
           const desiredSeed = String(seedInput?.value || "").trim();
           multiplayerState.lastError = "";
-          resetMultiplayerForHomeAction({ preserveHomeStep: true });
-          gameStateService.update({ gameStarted: false });
-          persistMultiplayerState();
-          setHomeStep("room-list");
+      resetMultiplayerForHomeAction({ preserveHomeStep: true });
+      gameStateService.update({ gameStarted: false });
+      persistMultiplayerState();
+          beginSidebarRefreshPending("Updating rooms...");
           renderMultiplayerUi();
           await ensureMultiplayerConnection();
           const payload = {
@@ -141,6 +145,9 @@
             renderMultiplayerUi();
             return;
           }
+          beginSidebarRefreshPending("Refreshing rooms...", {
+            expectation: "refresh",
+          });
           refreshPlayerHub(true);
         });
       }

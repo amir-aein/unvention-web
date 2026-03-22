@@ -86,7 +86,7 @@ function buildHarness() {
     user_id: 'user-1',
     email: 'tester@example.com',
     display_name: 'Tester',
-    legacy_profile_token: null,
+    legacy_profile_token: 'legacy-mode-token',
     last_seen_at: null,
   };
 
@@ -125,6 +125,18 @@ function buildHarness() {
   };
   globalThis.localStorage = createStorage();
   globalThis.sessionStorage = createStorage();
+  globalThis.localStorage.setItem(
+    'unvention.auth.session.v1',
+    JSON.stringify({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      user: {
+        id: authState.session.user.id,
+        email: authState.session.user.email,
+      },
+    }),
+  );
   globalThis.document = {
     querySelectorAll() {
       return [];
@@ -238,8 +250,60 @@ function buildHarness() {
     if (url.includes('/api/rooms')) {
       return createJsonResponse({ roomList: [] }, 200);
     }
+    if (url.includes('/api/auth/profile/load')) {
+      return createJsonResponse({
+        ok: true,
+        user: {
+          id: profileRow.user_id,
+          email: profileRow.email,
+          user_metadata: {},
+        },
+        profile: { ...profileRow },
+      }, 200);
+    }
+    if (url.includes('/api/auth/profile/update')) {
+      return createJsonResponse({
+        ok: true,
+        user: {
+          id: profileRow.user_id,
+          email: profileRow.email,
+          user_metadata: {},
+        },
+        profile: { ...profileRow },
+      }, 200);
+    }
     if (url.includes('/api/profile')) {
-      return createJsonResponse({ profile: null, activeRooms: [], recentRooms: [], serverTime: Date.now() }, 200);
+      return createJsonResponse({
+        ok: true,
+        profile: null,
+        directory: {
+          openRooms: [
+            {
+              roomCode: 'AB12CD',
+              roomDisplayName: 'Room AB12CD',
+              roomStatus: 'lobby',
+              playerCount: 1,
+              maxPlayers: 5,
+              hostPlayerId: 'P1',
+              hostName: 'Host',
+              myPlayerId: '',
+              myPlayerName: '',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              joinable: true,
+              canReconnect: false,
+              currentJoined: false,
+            },
+          ],
+          activeRooms: [],
+          archivedRooms: [],
+        },
+        rooms: [],
+        activeRooms: [],
+        recentRooms: [],
+        version: 1,
+        serverTime: Date.now(),
+      }, 200);
     }
     return createJsonResponse({ ok: false, error: 'not_found' }, 404);
   };
@@ -385,7 +449,7 @@ test('joining an open room from directory sends join_room with selected room cod
   clickListener({
     target: {
       closest(selector) {
-        if (selector === "button[data-action='join-listed-room']") {
+        if (selector === "button[data-action='home-room-open']") {
           return {
             getAttribute(name) {
               return name === 'data-room-code' ? 'AB12CD' : '';

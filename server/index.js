@@ -3,21 +3,28 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const { WebSocketServer } = require("ws");
+const { createRoomRepository } = require("./roomRepository");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 loadProjectEnv(path.join(PROJECT_ROOT, ".env"));
 
 const PORT = Number(process.env.PORT || 8080);
+const SERVER_OUTPUT_DIR = path.resolve(
+  String(process.env.SERVER_OUTPUT_DIR || path.join(__dirname, "output")),
+);
 const APP_PUBLIC_ORIGIN = normalizePublicOrigin(
   process.env.APP_PUBLIC_ORIGIN,
   PORT,
 );
 const MAX_PLAYERS = 5;
-const RECONNECT_WINDOW_MS = 15 * 60 * 1000;
-const SWEEP_INTERVAL_MS = 10 * 1000;
-const ACTION_LOG_PATH = path.join(__dirname, "output", "actions.ndjson");
-const ROOM_EVENT_LOG_PATH = path.join(__dirname, "output", "room-events.ndjson");
-const PROFILE_SNAPSHOT_PATH = path.join(__dirname, "output", "profiles.json");
+const RECONNECT_WINDOW_MS = Number(
+  process.env.RECONNECT_WINDOW_MS || 15 * 60 * 1000,
+);
+const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS || 10 * 1000);
+const ACTION_LOG_PATH = path.join(SERVER_OUTPUT_DIR, "actions.ndjson");
+const ROOM_EVENT_LOG_PATH = path.join(SERVER_OUTPUT_DIR, "room-events.ndjson");
+const PROFILE_SNAPSHOT_PATH = path.join(SERVER_OUTPUT_DIR, "profiles.json");
+const ROOM_SNAPSHOT_PATH = path.join(SERVER_OUTPUT_DIR, "rooms.json");
 const DAYS = ["Friday", "Saturday", "Sunday"];
 const DAY_THRESHOLDS = {
   Friday: 1,
@@ -56,10 +63,23 @@ const SUPABASE_SYNC = createSupabaseSync({
   url: process.env.SUPABASE_URL,
   secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
 });
+const ROOM_REPOSITORY = createRoomRepository({
+  filePath: ROOM_SNAPSHOT_PATH,
+  supabaseUrl: process.env.SUPABASE_URL,
+  supabaseSecretKey:
+    process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+  fetch: typeof fetch === "function" ? fetch : null,
+});
 const SUPABASE_AUTH_CONFIG = {
   url: String(process.env.SUPABASE_URL || "").trim(),
   publishableKey: String(process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim(),
   publicOrigin: APP_PUBLIC_ORIGIN,
+};
+const SUPABASE_ADMIN_CONFIG = {
+  url: String(process.env.SUPABASE_URL || "").trim(),
+  secretKey: String(
+    process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+  ).trim(),
 };
 
 const rooms = new Map();
@@ -75,6 +95,7 @@ let persistProfilesTimer = null;
 ensureLogPath();
 loadProfilesSnapshot();
 loadRoomEventHistory();
+loadPersistedRooms();
 
 const httpServer = http.createServer((req, res) => {
   const method = String(req.method || "").toUpperCase();
@@ -98,6 +119,7 @@ const httpServer = http.createServer((req, res) => {
       profiles: profilesById.size,
       serverTime: Date.now(),
       supabaseSync: SUPABASE_SYNC.getStatus(),
+      roomRepository: ROOM_REPOSITORY.getStatus(),
     });
     return;
   }
@@ -171,11 +193,16 @@ const httpServer = http.createServer((req, res) => {
 
   if (method === "GET" && pathname === "/api/profile") {
     const profileToken = String(url?.searchParams?.get("profileToken") || "");
+    const currentRoomCode = String(
+      url?.searchParams?.get("currentRoomCode") || "",
+    );
     if (!profileToken) {
       sendJson(res, 400, { ok: false, error: "missing_profile_token" });
       return;
     }
-    const payload = buildProfilePayload(profileToken);
+    const payload = buildProfilePayload(profileToken, {
+      currentRoomCode,
+    });
     if (!payload) {
       sendJson(res, 200, { ok: false, error: "profile_not_found", serverTime: Date.now() });
       return;
@@ -208,6 +235,23 @@ const httpServer = http.createServer((req, res) => {
       return;
     }
     const payload = resetActiveRoomsForProfile(profileToken);
+    if (!payload) {
+      sendJson(res, 404, { ok: false, error: "profile_not_found" });
+      return;
+    }
+    sendJson(res, 200, payload);
+    return;
+  }
+
+  const deleteProfileRoomMatch = pathname.match(/^\/api\/profile\/rooms\/([A-Za-z0-9_-]+)\/delete$/);
+  if (method === "POST" && deleteProfileRoomMatch) {
+    const profileToken = String(url?.searchParams?.get("profileToken") || "");
+    const roomCode = String(deleteProfileRoomMatch[1] || "");
+    if (!profileToken) {
+      sendJson(res, 400, { ok: false, error: "missing_profile_token" });
+      return;
+    }
+    const payload = deleteProfileRoomHistory(profileToken, roomCode);
     if (!payload) {
       sendJson(res, 404, { ok: false, error: "profile_not_found" });
       return;
@@ -438,15 +482,20 @@ function onJoinRoom(ws, message) {
   const seat = getFirstOpenSeat(room);
   const playerName = sanitizeName(message?.name, "Guest");
   const profile = resolveOrCreateProfile(message?.profileToken, playerName);
+  const shouldBecomeHost =
+    !String(room.hostPlayerId || "").trim() || room.players.length === 0;
   const player = createPlayer({
     roomCode: room.code,
     seat,
     name: playerName,
-    isHost: false,
+    isHost: shouldBecomeHost,
     connectionId: ws.meta.connectionId,
     profileId: profile.profileId,
   });
   room.players.push(player);
+  if (shouldBecomeHost) {
+    room.hostPlayerId = player.playerId;
+  }
   if (!room.playerProfiles || typeof room.playerProfiles !== "object") {
     room.playerProfiles = {};
   }
@@ -971,8 +1020,10 @@ function sweepExpiredPlayers() {
     }
     if (room.players.length === 0) {
       archiveRoom(room, "empty_room");
-      rooms.delete(room.code);
-      appendActionLog(room.code, "delete_room", { reason: "empty_room" });
+      room.hostPlayerId = "";
+      room.updatedAt = now;
+      persistRoom(room);
+      appendActionLog(room.code, "room_retained", { reason: "empty_room" });
       return;
     }
     if (!room.players.some((player) => player.playerId === room.hostPlayerId)) {
@@ -1025,7 +1076,8 @@ function removePlayer(room, playerId, actionType, byPlayerId) {
   }
 
   if (room.players.length === 0) {
-    terminateRoom(room, "empty_room", byPlayerId || playerId);
+    room.hostPlayerId = "";
+    persistRoom(room);
     return;
   }
   if (!room.players.some((item) => item.playerId === room.hostPlayerId)) {
@@ -1068,10 +1120,12 @@ function terminateRoom(room, reason, byPlayerId) {
     socket.meta.profileId = null;
   });
   rooms.delete(room.code);
+  ROOM_REPOSITORY.removeRoom(room.code);
 }
 
 function broadcastRoomState(room) {
   room.updatedAt = Date.now();
+  persistRoom(room);
   room.players.forEach((player) => {
     if (!player.connected || !player.connectionId) {
       return;
@@ -1125,6 +1179,7 @@ function serializeRoom(room) {
     hostPlayerId: room.hostPlayerId,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt,
+    archivedAt: room.archivedAt || null,
     turn: {
       number: room.turn.number,
       day: room.turn.day,
@@ -1153,6 +1208,82 @@ function serializeRoom(room) {
       liveState: player.liveState || null,
     })),
   };
+}
+
+function serializePersistedRoom(room) {
+  return {
+    code: String(room?.code || "").trim().toUpperCase(),
+    displayName: String(room?.displayName || ""),
+    status: String(room?.status || "lobby"),
+    maxPlayers: Math.max(1, Number(room?.maxPlayers || MAX_PLAYERS)),
+    hostPlayerId: String(room?.hostPlayerId || ""),
+    createdAt: Number(room?.createdAt || Date.now()),
+    updatedAt: Number(room?.updatedAt || Date.now()),
+    archivedAt: room?.archivedAt ? Number(room.archivedAt) : null,
+    lastArchiveReason: room?.lastArchiveReason
+      ? String(room.lastArchiveReason)
+      : null,
+    turn: {
+      number: Number(room?.turn?.number || 1),
+      day: String(room?.turn?.day || "Friday"),
+      roll: Array.isArray(room?.turn?.roll) ? room.turn.roll.slice(0, 5) : null,
+      rolledAt: room?.turn?.rolledAt ? Number(room.turn.rolledAt) : null,
+    },
+    sharedLog: Array.isArray(room?.sharedLog)
+      ? safeClone(room.sharedLog).slice(-MAX_SHARED_LOG_ENTRIES)
+      : [],
+    playerProfiles:
+      room?.playerProfiles && typeof room.playerProfiles === "object"
+        ? safeClone(room.playerProfiles)
+        : {},
+    players: Array.isArray(room?.players)
+      ? room.players.map((player) => ({
+          playerId: String(player?.playerId || ""),
+          profileId: player?.profileId ? String(player.profileId) : "",
+          name: String(player?.name || "Player"),
+          seat: Math.max(1, Number(player?.seat || 1)),
+          connected: Boolean(player?.connected),
+          connectionId: null,
+          reconnectToken: String(player?.reconnectToken || ""),
+          lastSeenAt: Number(player?.lastSeenAt || Date.now()),
+          canReconnectUntil: player?.canReconnectUntil
+            ? Number(player.canReconnectUntil)
+            : null,
+          endedTurn: Boolean(player?.endedTurn),
+          turnSummary:
+            player?.turnSummary && typeof player.turnSummary === "object"
+              ? safeClone(player.turnSummary)
+              : null,
+          liveState:
+            player?.liveState && typeof player.liveState === "object"
+              ? safeClone(player.liveState)
+              : null,
+          roomCode: String(room?.code || "").trim().toUpperCase(),
+          isHost:
+            String(player?.playerId || "") === String(room?.hostPlayerId || ""),
+        }))
+      : [],
+  };
+}
+
+function hydratePersistedRoom(roomInput) {
+  const room = serializePersistedRoom(roomInput);
+  room.players = room.players.map((player) => ({
+    ...player,
+    connected: false,
+    connectionId: null,
+  }));
+  if (!room.hostPlayerId && room.players.length > 0) {
+    room.hostPlayerId = String(room.players[0].playerId || "");
+  }
+  return room;
+}
+
+function persistRoom(room) {
+  if (!room || !room.code) {
+    return;
+  }
+  ROOM_REPOSITORY.saveRoom(serializePersistedRoom(room));
 }
 
 function appendSharedLogFromTurnSummary(room, player, summary) {
@@ -1391,6 +1522,10 @@ function sanitizeName(input, fallback) {
   return normalized.slice(0, 24);
 }
 
+function normalizeRoomCode(roomCodeInput) {
+  return String(roomCodeInput || "").trim().toUpperCase();
+}
+
 function sanitizeTurnSummary(summaryInput) {
   const summary = summaryInput && typeof summaryInput === "object" ? summaryInput : {};
   const actions = Array.isArray(summary.actions) ? summary.actions : [];
@@ -1466,6 +1601,17 @@ function broadcast(room, type, payload) {
 function ensureLogPath() {
   const dir = path.dirname(ACTION_LOG_PATH);
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function loadPersistedRooms() {
+  const persistedRooms = ROOM_REPOSITORY.loadRooms();
+  persistedRooms.forEach((roomInput) => {
+    const room = hydratePersistedRoom(roomInput);
+    if (!room?.code) {
+      return;
+    }
+    rooms.set(room.code, room);
+  });
 }
 
 function loadProfilesSnapshot() {
@@ -1721,7 +1867,7 @@ function archiveRoom(room, reason) {
   if (!room || !room.code) {
     return;
   }
-  roomArchiveByCode.set(room.code, {
+  const archive = {
     code: room.code,
     displayName: String(room.displayName || ""),
     status: room.status,
@@ -1731,7 +1877,9 @@ function archiveRoom(room, reason) {
     createdAt: Number(room.createdAt || Date.now()),
     updatedAt: Date.now(),
     endedAt: Date.now(),
-  });
+  };
+  roomArchiveByCode.set(room.code, archive);
+  ROOM_REPOSITORY.archiveRoom(archive);
 }
 
 function appendActionLog(roomCode, type, payload) {
@@ -1977,11 +2125,14 @@ function summarizeRoom(room) {
   };
 }
 
-function buildProfilePayload(profileTokenInput) {
+function buildProfilePayload(profileTokenInput, optionsInput) {
   const profileToken = sanitizeProfileToken(profileTokenInput);
   if (!profileToken) {
     return null;
   }
+  const options =
+    optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+  const currentRoomCode = normalizeRoomCode(options.currentRoomCode || "");
   const profileId = profileIdByToken.get(profileToken);
   if (!profileId) {
     return null;
@@ -1991,6 +2142,10 @@ function buildProfilePayload(profileTokenInput) {
     return null;
   }
   const activeRooms = listActiveRoomsForProfile(profile.profileId);
+  const directory = buildHomepageDirectoryForProfile(
+    profile.profileId,
+    currentRoomCode,
+  );
   return {
     ok: true,
     profile: {
@@ -2000,8 +2155,11 @@ function buildProfilePayload(profileTokenInput) {
       updatedAt: profile.updatedAt,
       lastSeenAt: profile.lastSeenAt,
     },
+    directory,
+    rooms: buildHubRoomsForProfile(profile.profileId, currentRoomCode),
     activeRooms,
     recentRooms: Array.isArray(profile.rooms) ? profile.rooms.slice(0, MAX_PROFILE_ROOM_ENTRIES) : [],
+    version: Number(roomEventSequence || 0),
     serverTime: Date.now(),
   };
 }
@@ -2063,10 +2221,260 @@ function listActiveRoomsForProfile(profileIdInput) {
         endedTurn: Boolean(me.endedTurn),
         joinedAt: Number(room.createdAt || Date.now()),
         updatedAt: Number(room.updatedAt || Date.now()),
+        createdAt: Number(room.createdAt || Date.now()),
+        archivedAt: room.archivedAt ? Number(room.archivedAt) : null,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+    .sort((a, b) => {
+      const createdDiff = Number(a.createdAt || 0) - Number(b.createdAt || 0);
+      if (createdDiff !== 0) {
+        return createdDiff;
+      }
+      return String(a.roomCode || "").localeCompare(String(b.roomCode || ""));
+    });
+}
+
+function buildHubRoomsForProfile(profileIdInput, currentRoomCodeInput) {
+  const profileId = String(profileIdInput || "").trim();
+  const currentRoomCode = normalizeRoomCode(currentRoomCodeInput);
+  if (!profileId) {
+    return [];
+  }
+  return Array.from(rooms.values())
+    .map((room) => {
+      const roomStatus = String(room?.status || "").trim().toLowerCase();
+      if (roomStatus !== "lobby" && roomStatus !== "in_game") {
+        return null;
+      }
+      const players = Array.isArray(room.players) ? room.players : [];
+      const me = players.find(
+        (player) => String(player?.profileId || "") === profileId,
+      );
+      if (!me) {
+        return null;
+      }
+      const hostPlayerId = String(room?.hostPlayerId || "");
+      const hostPlayer =
+        players.find(
+          (player) => String(player?.playerId || "") === hostPlayerId,
+        ) || null;
+      return {
+        roomCode: String(room.code || ""),
+        roomDisplayName: String(room.displayName || ""),
+        roomStatus: String(room.status || "unknown"),
+        playerCount: players.length,
+        maxPlayers: Number(room.maxPlayers || MAX_PLAYERS),
+        hostPlayerId,
+        hostName: String(hostPlayer?.name || "Host"),
+        myPlayerId: String(me.playerId || ""),
+        myPlayerName: String(me.name || "Player"),
+        connected: Boolean(me.connected),
+        endedTurn: Boolean(me.endedTurn),
+        createdAt: Number(room.createdAt || Date.now()),
+        updatedAt: Number(room.updatedAt || Date.now()),
+        archivedAt: room.archivedAt ? Number(room.archivedAt) : null,
+        joinable:
+          roomStatus === "lobby" &&
+          players.length < Number(room.maxPlayers || MAX_PLAYERS),
+        canReconnect: Boolean(
+          !me.connected && Date.now() <= Number(me.canReconnectUntil || 0),
+        ),
+        currentJoined:
+          Boolean(currentRoomCode) &&
+          String(room.code || "") === currentRoomCode,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const createdDiff = Number(a.createdAt || 0) - Number(b.createdAt || 0);
+      if (createdDiff !== 0) {
+        return createdDiff;
+      }
+      return String(a.roomCode || "").localeCompare(String(b.roomCode || ""));
+    });
+}
+
+function buildHomepageDirectoryForProfile(profileIdInput, currentRoomCodeInput) {
+  const profileId = String(profileIdInput || "").trim();
+  const currentRoomCode = normalizeRoomCode(currentRoomCodeInput);
+  if (!profileId) {
+    return {
+      openRooms: [],
+      activeRooms: [],
+      archivedRooms: [],
+    };
+  }
+  const allActiveRooms = buildHubRoomsForProfile(profileId, currentRoomCode);
+  const openRooms = buildOpenRoomsForProfile(profileId, currentRoomCode);
+  const openRoomCodes = new Set(
+    openRooms.map((room) => String(room?.roomCode || "").trim().toUpperCase()),
+  );
+  const activeRooms = allActiveRooms.filter(
+    (room) => !openRoomCodes.has(String(room?.roomCode || "").trim().toUpperCase()),
+  );
+  const activeRoomCodes = new Set(
+    activeRooms.map((room) => String(room?.roomCode || "").trim().toUpperCase()),
+  );
+  return {
+    openRooms,
+    activeRooms,
+    archivedRooms: buildArchivedRoomsForProfile(profileId, activeRoomCodes),
+  };
+}
+
+function buildOpenRoomsForProfile(profileIdInput, currentRoomCodeInput) {
+  const profileId = String(profileIdInput || "").trim();
+  const currentRoomCode = normalizeRoomCode(currentRoomCodeInput);
+  return Array.from(rooms.values())
+    .map((room) => {
+      const roomStatus = String(room?.status || "").trim().toLowerCase();
+      if (roomStatus !== "lobby") {
+        return null;
+      }
+      const players = Array.isArray(room.players) ? room.players : [];
+      const hostPlayerId = String(room?.hostPlayerId || "");
+      const hostPlayer =
+        players.find(
+          (player) => String(player?.playerId || "") === hostPlayerId,
+        ) || null;
+      const me =
+        players.find(
+          (player) => String(player?.profileId || "") === profileId,
+        ) || null;
+      const maxPlayers = Number(room.maxPlayers || MAX_PLAYERS);
+      const joinable = players.length < maxPlayers;
+      if (!joinable && !me) {
+        return null;
+      }
+      return {
+        roomCode: String(room.code || ""),
+        roomDisplayName: String(room.displayName || ""),
+        roomStatus: String(room.status || "unknown"),
+        playerCount: players.length,
+        maxPlayers,
+        hostPlayerId,
+        hostName: String(hostPlayer?.name || "Host"),
+        myPlayerId: String(me?.playerId || ""),
+        myPlayerName: String(me?.name || ""),
+        connected: me ? Boolean(me.connected) : null,
+        endedTurn: me ? Boolean(me.endedTurn) : null,
+        createdAt: Number(room.createdAt || Date.now()),
+        updatedAt: Number(room.updatedAt || Date.now()),
+        archivedAt: room.archivedAt ? Number(room.archivedAt) : null,
+        joinable,
+        canReconnect: Boolean(
+          me && !me.connected && Date.now() <= Number(me.canReconnectUntil || 0),
+        ),
+        currentJoined:
+          Boolean(currentRoomCode) &&
+          String(room.code || "") === currentRoomCode,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const createdDiff = Number(a.createdAt || 0) - Number(b.createdAt || 0);
+      if (createdDiff !== 0) {
+        return createdDiff;
+      }
+      return String(a.roomCode || "").localeCompare(String(b.roomCode || ""));
+    });
+}
+
+function buildArchivedRoomsForProfile(profileIdInput, activeRoomCodesInput) {
+  const profileId = String(profileIdInput || "").trim();
+  if (!profileId) {
+    return [];
+  }
+  const profile = profilesById.get(profileId) || null;
+  const activeRoomCodes = activeRoomCodesInput instanceof Set
+    ? activeRoomCodesInput
+    : new Set();
+  const entries = Array.isArray(profile?.rooms) ? profile.rooms : [];
+  return entries
+    .map((entry) => {
+      const normalized = normalizeProfileRoomEntry(entry);
+      if (!normalized) {
+        return null;
+      }
+      const roomCode = String(normalized.roomCode || "");
+      if (!roomCode || activeRoomCodes.has(roomCode)) {
+        return null;
+      }
+      const archive = roomArchiveByCode.get(roomCode) || null;
+      const liveRoom = rooms.get(roomCode) || null;
+      const roomStatus = String(
+        archive?.status ||
+          normalized.roomStatus ||
+          liveRoom?.status ||
+          "archived",
+      )
+        .trim()
+        .toLowerCase();
+      const removedByAction = String(normalized.removedByAction || "").trim();
+      const shouldInclude =
+        Boolean(archive) ||
+        roomStatus === "completed" ||
+        roomStatus === "terminated" ||
+        roomStatus === "archived" ||
+        Boolean(removedByAction);
+      if (!shouldInclude) {
+        return null;
+      }
+      const livePlayers = Array.isArray(liveRoom?.players) ? liveRoom.players : [];
+      const hostPlayerId = String(
+        archive?.hostPlayerId || liveRoom?.hostPlayerId || "",
+      );
+      const hostPlayer =
+        livePlayers.find(
+          (player) => String(player?.playerId || "") === hostPlayerId,
+        ) || null;
+      return {
+        roomCode,
+        roomDisplayName: String(
+          archive?.displayName ||
+            normalized.roomDisplayName ||
+            liveRoom?.displayName ||
+            "",
+        ),
+        roomStatus: roomStatus || "archived",
+        playerCount: Number.isFinite(Number(archive?.playerCount))
+          ? Number(archive.playerCount)
+          : Array.isArray(liveRoom?.players)
+            ? liveRoom.players.length
+            : null,
+        maxPlayers: Number.isFinite(Number(liveRoom?.maxPlayers))
+          ? Number(liveRoom.maxPlayers)
+          : MAX_PLAYERS,
+        hostPlayerId,
+        hostName: String(hostPlayer?.name || "Host"),
+        myPlayerId: String(normalized.playerId || ""),
+        myPlayerName: String(normalized.playerName || "Player"),
+        connected: false,
+        endedTurn: null,
+        createdAt: Number(
+          archive?.createdAt || liveRoom?.createdAt || normalized.joinedAt || Date.now(),
+        ),
+        updatedAt: Number(
+          archive?.updatedAt || liveRoom?.updatedAt || normalized.lastSeenAt || Date.now(),
+        ),
+        archivedAt: Number(
+          archive?.endedAt || normalized.lastSeenAt || Date.now(),
+        ),
+        joinable: false,
+        canReconnect: false,
+        currentJoined: false,
+        removedByAction,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const createdDiff = Number(a.createdAt || 0) - Number(b.createdAt || 0);
+      if (createdDiff !== 0) {
+        return createdDiff;
+      }
+      return String(a.roomCode || "").localeCompare(String(b.roomCode || ""));
+    });
 }
 
 function resetActiveRoomsForProfile(profileTokenInput) {
@@ -2117,6 +2525,55 @@ function resetActiveRoomsForProfile(profileTokenInput) {
     terminatedRooms,
     removedSeats,
     activeRooms: listActiveRoomsForProfile(profileId),
+    serverTime: Date.now(),
+  };
+}
+
+function deleteProfileRoomHistory(profileTokenInput, roomCodeInput) {
+  const profileToken = sanitizeProfileToken(profileTokenInput);
+  const roomCode = normalizeRoomCode(roomCodeInput);
+  if (!profileToken || !roomCode) {
+    return null;
+  }
+  const profileId = String(profileIdByToken.get(profileToken) || "");
+  if (!profileId || !profilesById.has(profileId)) {
+    return null;
+  }
+  const profile = profilesById.get(profileId);
+  const previousRooms = Array.isArray(profile.rooms) ? profile.rooms : [];
+  const nextRooms = previousRooms.filter(
+    (entry) => String(entry?.roomCode || "") !== roomCode,
+  );
+  if (nextRooms.length === previousRooms.length) {
+    return {
+      ok: true,
+      profileId,
+      roomCode,
+      deleted: false,
+      directory: buildHomepageDirectoryForProfile(profileId, ""),
+      recentRooms: nextRooms.slice(0, MAX_PROFILE_ROOM_ENTRIES),
+      serverTime: Date.now(),
+    };
+  }
+  profile.rooms = nextRooms
+    .map((entry) => normalizeProfileRoomEntry(entry))
+    .filter(Boolean)
+    .slice(0, MAX_PROFILE_ROOM_ENTRIES);
+  const history = profileHistoryById.get(profileId) || [];
+  profileHistoryById.set(
+    profileId,
+    history.filter((event) => String(event?.roomCode || "") !== roomCode),
+  );
+  profile.updatedAt = Date.now();
+  profile.lastSeenAt = Date.now();
+  persistProfilesSoon();
+  return {
+    ok: true,
+    profileId,
+    roomCode,
+    deleted: true,
+    directory: buildHomepageDirectoryForProfile(profileId, ""),
+    recentRooms: profile.rooms.slice(0, MAX_PROFILE_ROOM_ENTRIES),
     serverTime: Date.now(),
   };
 }
@@ -2617,7 +3074,9 @@ async function handleAuthProfileLoad(req, res) {
   const body = await readJsonBody(req);
   const accessToken = String(body?.accessToken || "").trim();
   const user = await fetchAuthUser(accessToken);
-  const profile = await fetchAppUserProfile(accessToken, user?.id);
+  const profile = hasSupabaseAdminProfileAccess()
+    ? await upsertAppUserProfileAdmin(user, {})
+    : await fetchAppUserProfile(accessToken, user?.id);
   sendJson(res, 200, {
     ok: true,
     user,
@@ -2641,6 +3100,15 @@ async function handleAuthProfileUpdate(req, res) {
   if (Object.prototype.hasOwnProperty.call(patchInput, "last_seen_at")) {
     patch.last_seen_at = String(patchInput.last_seen_at || "").trim();
   }
+  if (hasSupabaseAdminProfileAccess()) {
+    const profile = await upsertAppUserProfileAdmin(user, patch);
+    sendJson(res, 200, {
+      ok: true,
+      user,
+      profile,
+    });
+    return;
+  }
   const updateResponse = await patchAppUserProfile(accessToken, user?.id, patch);
   if (!updateResponse.ok) {
     const payload = updateResponse.payload || {};
@@ -2657,7 +3125,12 @@ async function handleAuthProfileUpdate(req, res) {
     );
     return;
   }
-  const profile = await fetchAppUserProfile(accessToken, user?.id);
+  let profile = null;
+  try {
+    profile = await fetchAppUserProfile(accessToken, user?.id);
+  } catch (_error) {
+    profile = null;
+  }
   sendJson(res, 200, {
     ok: true,
     user,
@@ -2766,6 +3239,96 @@ async function fetchAppUserProfile(accessTokenInput, userIdInput) {
   return Array.isArray(payload) ? payload[0] || null : null;
 }
 
+function hasSupabaseAdminProfileAccess() {
+  return Boolean(
+    SUPABASE_ADMIN_CONFIG.url &&
+      SUPABASE_ADMIN_CONFIG.secretKey &&
+      typeof fetch === "function",
+  );
+}
+
+async function fetchAppUserProfileAdmin(userIdInput) {
+  const userId = String(userIdInput || "").trim();
+  if (!hasSupabaseAdminProfileAccess() || !userId) {
+    return null;
+  }
+  const endpoint =
+    String(SUPABASE_ADMIN_CONFIG.url).replace(/\/$/, "") +
+    "/rest/v1/app_users?select=" +
+    encodeURIComponent("user_id,email,display_name,legacy_profile_token,last_seen_at") +
+    "&user_id=eq." +
+    encodeURIComponent(userId);
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_ADMIN_CONFIG.secretKey,
+      authorization: "Bearer " + SUPABASE_ADMIN_CONFIG.secretKey,
+      accept: "application/json",
+      "x-client-info": "unvention-local-server",
+    },
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Could not load auth profile.",
+    );
+  }
+  return Array.isArray(payload) ? payload[0] || null : null;
+}
+
+async function upsertAppUserProfileAdmin(userInput, patchInput) {
+  const user = userInput && typeof userInput === "object" ? userInput : {};
+  const userId = String(user?.id || "").trim();
+  if (!hasSupabaseAdminProfileAccess() || !userId) {
+    return null;
+  }
+  const patch = patchInput && typeof patchInput === "object" ? patchInput : {};
+  const row = {
+    user_id: userId,
+    email: String(user?.email || "").trim() || null,
+  };
+  if (Object.prototype.hasOwnProperty.call(patch, "display_name")) {
+    row.display_name = String(patch.display_name || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "legacy_profile_token")) {
+    const token = String(patch.legacy_profile_token || "").trim();
+    row.legacy_profile_token = token || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "last_seen_at")) {
+    const timestamp = String(patch.last_seen_at || "").trim();
+    row.last_seen_at = timestamp || null;
+  }
+  const endpoint =
+    String(SUPABASE_ADMIN_CONFIG.url).replace(/\/$/, "") +
+    "/rest/v1/app_users?on_conflict=" +
+    encodeURIComponent("user_id");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_ADMIN_CONFIG.secretKey,
+      authorization: "Bearer " + SUPABASE_ADMIN_CONFIG.secretKey,
+      prefer: "resolution=merge-duplicates,return=representation",
+      "x-client-info": "unvention-local-server",
+    },
+    body: JSON.stringify([row]),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Could not update profile.",
+    );
+  }
+  if (Array.isArray(payload) && payload.length > 0) {
+    return payload[0];
+  }
+  return fetchAppUserProfileAdmin(userId);
+}
+
 async function patchAppUserProfile(accessTokenInput, userIdInput, patchInput) {
   const accessToken = String(accessTokenInput || "").trim();
   const userId = String(userIdInput || "").trim();
@@ -2836,12 +3399,19 @@ function buildRoomDirectoryPayload() {
       ),
       createdAt: Number(room.createdAt || Date.now()),
       updatedAt: Number(room.updatedAt || Date.now()),
+      archivedAt: room.archivedAt ? Number(room.archivedAt) : null,
       joinable:
         room.status === "lobby" &&
         Array.isArray(room.players) &&
         room.players.length < Number(room.maxPlayers || MAX_PLAYERS),
     }))
-    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+    .sort((a, b) => {
+      const createdDiff = Number(a.createdAt || 0) - Number(b.createdAt || 0);
+      if (createdDiff !== 0) {
+        return createdDiff;
+      }
+      return String(a.code || "").localeCompare(String(b.code || ""));
+    });
   return {
     ok: true,
     service: "unvention-multiplayer",
@@ -2876,6 +3446,14 @@ function serveStaticAsset(pathnameInput, res, headOnly) {
 
   fs.stat(assetPath, (error, stat) => {
     if (error || !stat.isFile()) {
+      const shouldServeSpaShell =
+        pathname !== "/" &&
+        !pathname.startsWith("/api/") &&
+        !path.extname(relativePath);
+      if (shouldServeSpaShell) {
+        serveStaticAsset("/index.html", res, headOnly);
+        return;
+      }
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       if (!headOnly) {
         res.end("Not Found");

@@ -7,7 +7,7 @@
     <link rel="icon" href="data:," />
     <link
       rel="stylesheet"
-      href="src/ui/vanilla/styles/main.css?v=20260216-50"
+      href="src/ui/vanilla/styles/main.css?v=20260322-51"
     />
   </head>
   <body>
@@ -38,48 +38,11 @@
       aria-label="New game setup"
       style="display: none"
     >
-      <aside class="home-sidebar">
-        <div class="home-sidebar-container">
+      <header class="home-topbar">
+        <div class="home-topbar__brand">
           <div>
             <h1 class="home-sidebar__title">Unvention</h1>
             <span class="signature">By Amir Aein</span>
-          </div>
-          <a
-            id="home-sidebar-home"
-            class="home-sidebar__nav-item"
-            role="button"
-            tabindex="0"
-            data-action="hub-home-nav"
-            ><svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              width="15px"
-              margin-right="0.3rem"
-            >
-              <path
-                d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"
-              ></path>
-              <polyline points="9 21 9 12 15 12 15 21"></polyline>
-            </svg>
-            Home</a
-          >
-          <div class="home-sidebar__rooms">
-            <div class="home-sidebar__rooms-head">
-              <strong>Rooms</strong>
-              <div class="home-sidebar__rooms-actions">
-                <button id="home-refresh-rooms" type="button">
-                  Refresh <span style="font-size: 1rem">↺</span>
-                </button>
-              </div>
-            </div>
-            <p id="hub-profile-line" class="mp-status-line">
-              Loading player history...
-            </p>
-            <div id="mp-hub-room-list" class="mp-hub-room-list"></div>
           </div>
         </div>
         <section
@@ -101,7 +64,7 @@
             Log Out
           </button>
         </section>
-      </aside>
+      </header>
       <main class="home-main">
         <div class="new-game-card">
           <section id="home-step-mode" class="mp-setup">
@@ -160,18 +123,25 @@
               </section>
             </div>
             <section id="mp-room-directory" class="home-mp-panel">
-              <h2>Open Rooms</h2>
-              <table class="mp-room-directory__table">
-                <thead>
-                  <tr>
-                    <th>Room</th>
-                    <th>Players</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="mp-room-directory-body"></tbody>
-              </table>
+              <div class="home-directory-head">
+                <div>
+                  <h2>Rooms</h2>
+                  <p id="hub-profile-line" class="mp-status-line">
+                    Loading player history...
+                  </p>
+                </div>
+                <div class="home-directory-head__actions">
+                  <button id="home-refresh-rooms" type="button">
+                    Refresh <span style="font-size: 1rem">↺</span>
+                  </button>
+                </div>
+              </div>
+              <div
+                id="home-sidebar-refresh-status"
+                class="home-sidebar__refresh-status"
+                style="display: none"
+              ></div>
+              <div id="mp-room-directory-body" class="mp-room-directory"></div>
             </section>
           </section>
           <section
@@ -179,9 +149,27 @@
             class="mp-setup"
             style="display: none"
           >
-            <h3 id="mp-hub-room-title">Select a room</h3>
+            <button id="home-room-back" type="button" class="workspace-back-btn">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M8.5 2L3.5 7L8.5 12"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              Back
+            </button>
+            <h3 id="mp-hub-room-title">Room Details</h3>
             <p id="mp-hub-room-meta" class="mp-status-line">
-              Pick a room from the sidebar.
+              Review this room and manage it.
             </p>
             <div class="mp-setup__buttons">
               <button
@@ -197,6 +185,14 @@
                 class="button-destructive"
               >
                 Abandon Game
+              </button>
+              <button
+                id="home-room-delete-history-inline"
+                type="button"
+                class="button-secondary"
+                style="display: none"
+              >
+                Delete
               </button>
             </div>
             <p id="home-room-action-hint" class="mp-status-line"></p>

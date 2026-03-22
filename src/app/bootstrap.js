@@ -225,6 +225,15 @@
   let hubSelectedRoomCode = "";
   let gameSurfaceRoomCode = "";
   let hubAutoRefreshTimer = null;
+  let sidebarRefreshPending = false;
+  let sidebarRefreshPendingReason = "";
+  let sidebarRefreshPendingSince = 0;
+  let sidebarRefreshPendingClearTimer = null;
+  let sidebarRefreshPendingBaselineSignature = "";
+  let sidebarRefreshPendingBaselineVersion = 0;
+  let sidebarRefreshPendingExpectation = "change";
+  let hubRefreshVersion = 0;
+  let homeDirectoryStale = false;
   let selectedVariableSetup = getDefaultVariableSetupSelection();
   let sectionPlayerViews = SECTION_VIEW_KEYS.reduce((accumulator, key) => {
     accumulator[key] = "";
@@ -233,11 +242,13 @@
   let sectionViewTransitionPending = false;
   let homeStep = "mode";
   let forceHomeSurface = true;
+  let currentRoute = null;
   let supabaseAuth = createAuthController();
   let authProfileSyncTimer = null;
   loadHomeUiState();
   loadAuthUiState();
-  homeStep = "mode";
+  currentRoute = parseAppRoute();
+  syncUiStateToRoute(currentRoute);
   const originalLogEvent = loggerService.logEvent.bind(loggerService);
   loggerService.logEvent = function logEventWithTurnCapture(
     level,
@@ -316,7 +327,138 @@
     return Boolean(state && state.gameStarted);
   }
 
+  function normalizeRouteRoomCode(roomCodeInput) {
+    return normalizeRoomCode(roomCodeInput);
+  }
+
+  function parseAppRoute(locationInput) {
+    const locationRef =
+      locationInput ||
+      (typeof globalScope.location !== "undefined" ? globalScope.location : {});
+    const rawPath = String(locationRef.pathname || "/").trim() || "/";
+    const normalizedPath = rawPath.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
+    const segments = normalizedPath.split("/").filter(Boolean);
+    if (segments.length === 0) {
+      return { name: "home", roomCode: "" };
+    }
+    if (segments[0] === "play" && segments[1] === "local") {
+      return { name: "local-play", roomCode: "" };
+    }
+    if (segments[0] === "hub") {
+      return { name: "hub", roomCode: "" };
+    }
+    if (segments[0] === "rooms" && segments[1]) {
+      const roomCode = normalizeRouteRoomCode(segments[1]);
+      if (!roomCode) {
+        return { name: "hub", roomCode: "" };
+      }
+      if (segments[2] === "game") {
+        return { name: "room-game", roomCode };
+      }
+      return { name: "room", roomCode };
+    }
+    return { name: "home", roomCode: "" };
+  }
+
+  function buildAppRoutePath(routeInput) {
+    const route = routeInput && typeof routeInput === "object" ? routeInput : {};
+    const name = String(route.name || "home");
+    const roomCode = normalizeRouteRoomCode(route.roomCode || "");
+    if (name === "local-play") {
+      return "/play/local";
+    }
+    if (name === "hub") {
+      return "/hub";
+    }
+    if (name === "room" && roomCode) {
+      return "/rooms/" + roomCode;
+    }
+    if (name === "room-game" && roomCode) {
+      return "/rooms/" + roomCode + "/game";
+    }
+    return "/";
+  }
+
+  function syncUiStateToRoute(routeInput) {
+    const route = routeInput && typeof routeInput === "object" ? routeInput : { name: "home", roomCode: "" };
+    currentRoute = {
+      name: String(route.name || "home"),
+      roomCode: normalizeRouteRoomCode(route.roomCode || ""),
+    };
+    if (currentRoute.roomCode) {
+      hubSelectedRoomCode = currentRoute.roomCode;
+    } else if (currentRoute.name === "hub" || currentRoute.name === "home") {
+      hubSelectedRoomCode = "";
+    }
+    if (currentRoute.name === "room-game") {
+      gameSurfaceRoomCode = currentRoute.roomCode;
+      forceHomeSurface = false;
+      homeStep = "room-list";
+      return currentRoute;
+    }
+    if (currentRoute.name === "room" || currentRoute.name === "hub") {
+      gameSurfaceRoomCode =
+        currentRoute.name === "room" ? "" : gameSurfaceRoomCode;
+      forceHomeSurface = true;
+      homeStep = "room-list";
+      return currentRoute;
+    }
+    if (currentRoute.name === "local-play") {
+      gameSurfaceRoomCode = "";
+      forceHomeSurface = false;
+      homeStep = "mode";
+      return currentRoute;
+    }
+    gameSurfaceRoomCode = "";
+    forceHomeSurface = true;
+    homeStep = "mode";
+    return currentRoute;
+  }
+
+  function navigateToRoute(routeInput, optionsInput) {
+    const options = optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const route = syncUiStateToRoute(routeInput);
+    const path = buildAppRoutePath(route);
+    const useReplace = Boolean(options.replace);
+    if (
+      typeof globalScope.history !== "undefined" &&
+      typeof globalScope.history[useReplace ? "replaceState" : "pushState"] === "function" &&
+      typeof globalScope.location !== "undefined"
+    ) {
+      const currentPath = String(globalScope.location.pathname || "/");
+      if (currentPath !== path || useReplace) {
+        globalScope.history[useReplace ? "replaceState" : "pushState"](null, "", path);
+      }
+    }
+    if (options.render !== false) {
+      renderMultiplayerUi();
+      renderState();
+    }
+    if (
+      isAuthenticated() &&
+      homeDirectoryStale &&
+      (route.name === "home" || route.name === "hub")
+    ) {
+      refreshPlayerHub(true);
+    }
+    return route;
+  }
+
+  function getCurrentOrSelectedRoomCode() {
+    return normalizeRoomCode(
+      currentRoute?.roomCode ||
+        hubSelectedRoomCode ||
+        multiplayerState.room?.code ||
+        multiplayerState.roomCode ||
+        "",
+    );
+  }
+
   function resolveHomeStep() {
+    const routeName = String(currentRoute?.name || "");
+    if (routeName === "hub" || routeName === "room" || routeName === "room-game") {
+      return "room-list";
+    }
     const normalized = String(homeStep || "mode");
     if (normalized === "waitroom") {
       return "room-list";
@@ -329,8 +471,108 @@
 
   function setHomeStep(nextStep) {
     homeStep = String(nextStep || "mode");
+    if (homeStep === "room-list") {
+      const roomCode = getCurrentOrSelectedRoomCode();
+      if (roomCode) {
+        navigateToRoute(
+          {
+            name:
+              String(currentRoute?.name || "") === "room-game"
+                ? "room-game"
+                : "room",
+            roomCode,
+          },
+          { render: false },
+        );
+      } else {
+        navigateToRoute({ name: "hub", roomCode: "" }, { render: false });
+      }
+    } else {
+      navigateToRoute({ name: "home", roomCode: "" }, { render: false });
+    }
     persistHomeUiState();
     renderMultiplayerUi();
+  }
+
+  function getSidebarVisibleRooms() {
+    return createHubRoomList();
+  }
+
+  function getSidebarStateSignature() {
+    return JSON.stringify(
+      getSidebarVisibleRooms().map((room) => ({
+        roomCode: String(room.roomCode || ""),
+        createdAt: Number(room.createdAt || 0),
+        status: String(room.status || ""),
+        playerCount:
+          room.playerCount === null ? null : Number(room.playerCount || 0),
+        currentJoined: Boolean(room.currentJoined),
+      })),
+    );
+  }
+
+  function beginSidebarRefreshPending(reasonInput, optionsInput) {
+    const options =
+      optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    sidebarRefreshPending = true;
+    sidebarRefreshPendingReason = String(reasonInput || "Updating rooms...");
+    sidebarRefreshPendingSince = Date.now();
+    sidebarRefreshPendingExpectation =
+      String(options.expectation || "change").toLowerCase() === "refresh"
+        ? "refresh"
+        : "change";
+    sidebarRefreshPendingBaselineSignature = getSidebarStateSignature();
+    sidebarRefreshPendingBaselineVersion = hubRefreshVersion;
+    if (sidebarRefreshPendingClearTimer) {
+      globalScope.clearTimeout(sidebarRefreshPendingClearTimer);
+      sidebarRefreshPendingClearTimer = null;
+    }
+    renderMultiplayerUi();
+  }
+
+  function clearSidebarRefreshPending() {
+    if (!sidebarRefreshPending) {
+      return;
+    }
+    sidebarRefreshPending = false;
+    sidebarRefreshPendingReason = "";
+    sidebarRefreshPendingSince = 0;
+    sidebarRefreshPendingBaselineSignature = "";
+    sidebarRefreshPendingBaselineVersion = hubRefreshVersion;
+    sidebarRefreshPendingExpectation = "change";
+    if (sidebarRefreshPendingClearTimer) {
+      globalScope.clearTimeout(sidebarRefreshPendingClearTimer);
+      sidebarRefreshPendingClearTimer = null;
+    }
+    renderMultiplayerUi();
+  }
+
+  function maybeResolveSidebarRefreshPending(optionsInput) {
+    if (!sidebarRefreshPending) {
+      return;
+    }
+    const options =
+      optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const force = Boolean(options.force);
+    const hasError = Boolean(options.hasError);
+    const elapsedMs = Date.now() - Number(sidebarRefreshPendingSince || 0);
+    const currentSignature = getSidebarStateSignature();
+    const completedNewRefreshCycle =
+      Number(hubRefreshVersion || 0) > Number(sidebarRefreshPendingBaselineVersion || 0);
+    const changed = currentSignature !== sidebarRefreshPendingBaselineSignature;
+    const refreshComplete =
+      completedNewRefreshCycle &&
+      (sidebarRefreshPendingExpectation === "refresh" || changed);
+    if (force || hasError || refreshComplete || elapsedMs >= 10000) {
+      clearSidebarRefreshPending();
+      return;
+    }
+    if (!sidebarRefreshPendingClearTimer && elapsedMs < 10000) {
+      sidebarRefreshPendingClearTimer = globalScope.setTimeout(() => {
+        sidebarRefreshPendingClearTimer = null;
+        maybeResolveSidebarRefreshPending();
+      }, 250);
+    }
   }
 
   function getDefaultVariableSetupSelection() {
@@ -430,7 +672,6 @@
         HOME_UI_STORAGE_KEY,
         JSON.stringify({
           variableSetup: selectedVariableSetup,
-          homeStep,
         }),
       );
     } catch (_error) {}
@@ -893,6 +1134,8 @@
     if (!supabaseAuth.user?.id || !getAuthAccessToken()) {
       return;
     }
+    const currentProfileToken = String(multiplayerState.profileToken || "").trim();
+    const currentPlayerName = String(multiplayerState.name || "").trim();
     setAuthStage("profile_fetch");
     const response = await fetch(buildAuthApiUrl("/api/auth/profile/load"), {
       method: "POST",
@@ -929,8 +1172,8 @@
     supabaseAuth.profile = payload?.profile || null;
     const profileName = getAssignedDisplayName();
     const profileLegacyToken = getAuthProfileLegacyToken();
-    multiplayerState.name = profileName || "";
-    multiplayerState.profileToken = profileLegacyToken || "";
+    multiplayerState.name = profileName || currentPlayerName || "";
+    multiplayerState.profileToken = profileLegacyToken || currentProfileToken || "";
     persistMultiplayerState();
     syncDisplayNameRequirement();
   }
@@ -1229,7 +1472,7 @@
     hubProfileSummary = null;
     hubProfileError = "";
     roomDirectoryError = "";
-    homeStep = "mode";
+    navigateToRoute({ name: "home", roomCode: "" }, { render: false, replace: true });
     clearPersistedAuthSession();
     persistAuthUiState();
     setAuthFeedback("Signed out", "info");
@@ -1912,7 +2155,7 @@
     queueAuthProfileSync("reset_local_multiplayer");
     setHomeStep("mode");
     renderMultiplayerUi();
-    await refreshRoomDirectory(true);
+    await refreshPlayerHub(true);
     loggerService.logEvent("info", "Reset local multiplayer memory", {
       source: "ui",
     });
@@ -1940,6 +2183,7 @@
     }
     multiplayerClient.disconnect();
     persistMultiplayerState();
+    navigateToRoute({ name: "home", roomCode: "" }, { render: false, replace: true });
     renderMultiplayerUi();
     renderState();
     refreshPlayerHub(true);
@@ -2356,11 +2600,25 @@
     ) {
       return;
     }
-    globalScope.history.replaceState(
-      null,
-      "",
-      String(globalScope.location.pathname || "/"),
+    const currentUrl = new URL(
+      String(globalScope.location.href || "http://127.0.0.1/"),
     );
+    [
+      "access_token",
+      "refresh_token",
+      "code",
+      "token_hash",
+      "type",
+      "error",
+      "error_code",
+      "error_description",
+    ].forEach((key) => {
+      currentUrl.searchParams.delete(key);
+    });
+    const nextUrl =
+      String(currentUrl.pathname || "/") +
+      String(currentUrl.search || "");
+    globalScope.history.replaceState(null, "", nextUrl);
   }
 
   function buildAuthStageError(stageInput, messageInput) {
@@ -2371,6 +2629,101 @@
 
   function buildRoomDirectoryCandidates(inputUrl) {
     return buildApiCandidates(inputUrl, "/api/rooms");
+  }
+
+  function createDirectoryRoomRecord(roomInput) {
+    const room = roomInput && typeof roomInput === "object" ? roomInput : {};
+    const normalizedRoomCode = normalizeRoomCode(room.roomCode || room.code || "");
+    if (!normalizedRoomCode) {
+      return null;
+    }
+    return {
+      roomCode: normalizedRoomCode,
+      roomDisplayName: String(room.roomDisplayName || room.displayName || ""),
+      status: String(room.roomStatus || room.status || "unknown").toLowerCase(),
+      playerCount: Number.isFinite(Number(room.playerCount))
+        ? Number(room.playerCount)
+        : null,
+      maxPlayers: Number.isFinite(Number(room.maxPlayers))
+        ? Number(room.maxPlayers)
+        : null,
+      hostPlayerId: String(room.hostPlayerId || ""),
+      hostName: sanitizeDisplayName(room.hostName || ""),
+      joinable: Boolean(room.joinable),
+      connected: Object.prototype.hasOwnProperty.call(room, "connected")
+        ? room.connected === null
+          ? null
+          : Boolean(room.connected)
+        : null,
+      myEndedTurn:
+        typeof room.endedTurn === "boolean" ? Boolean(room.endedTurn) : null,
+      myPlayerId: String(room.myPlayerId || room.playerId || ""),
+      myPlayerName: sanitizeDisplayName(room.myPlayerName || room.playerName || ""),
+      activityAt: Number(room.updatedAt || room.createdAt || room.archivedAt || 0),
+      createdAt: Number(room.createdAt || 0),
+      archivedAt: room.archivedAt ? Number(room.archivedAt) : null,
+      currentJoined: Boolean(room.currentJoined),
+      canReconnect: Boolean(room.canReconnect),
+      isHosting:
+        String(room.hostPlayerId || "") === String(room.myPlayerId || room.playerId || ""),
+      removedByAction: String(room.removedByAction || ""),
+    };
+  }
+
+  function getHomeDirectorySections() {
+    const directory =
+      hubProfileSummary?.directory &&
+      typeof hubProfileSummary.directory === "object"
+        ? hubProfileSummary.directory
+        : {};
+    const openRooms = Array.isArray(directory.openRooms)
+      ? directory.openRooms.map(createDirectoryRoomRecord).filter(Boolean)
+      : [];
+    const activeRooms = Array.isArray(directory.activeRooms)
+      ? directory.activeRooms.map(createDirectoryRoomRecord).filter(Boolean)
+      : createHubRoomList();
+    const archivedRooms = Array.isArray(directory.archivedRooms)
+      ? directory.archivedRooms.map(createDirectoryRoomRecord).filter(Boolean)
+      : [];
+    return {
+      openRooms,
+      activeRooms,
+      archivedRooms,
+    };
+  }
+
+  function getAllHomeDirectoryRooms() {
+    const sections = getHomeDirectorySections();
+    return sections.openRooms
+      .concat(sections.activeRooms)
+      .concat(sections.archivedRooms);
+  }
+
+  function findHomeDirectoryRoom(roomCodeInput) {
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!roomCode) {
+      return null;
+    }
+    return (
+      getAllHomeDirectoryRooms().find((room) => room.roomCode === roomCode) ||
+      null
+    );
+  }
+
+  function invalidateHomeDirectory(optionsInput) {
+    const options =
+      optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+    const immediate = Boolean(options.immediate);
+    homeDirectoryStale = true;
+    if (
+      immediate &&
+      isAuthenticated() &&
+      String(currentRoute?.name || "") === "home"
+    ) {
+      refreshPlayerHub(true);
+    } else {
+      renderMultiplayerUi();
+    }
   }
 
   async function fetchFirstJsonFromCandidates(urls) {
@@ -2403,115 +2756,165 @@
       return;
     }
     const body = document.getElementById("mp-room-directory-body");
+    const profileLine = document.getElementById("hub-profile-line");
+    const refreshStatusNode = document.getElementById(
+      "home-sidebar-refresh-status",
+    );
     if (!body) {
       return;
     }
-    if (roomDirectoryLoading && roomDirectoryRows.length === 0) {
-      body.innerHTML = "<tr><td colspan='4'>Loading...</td></tr>";
+    if (profileLine) {
+      if (!multiplayerState.profileToken) {
+        profileLine.textContent = "Browse open games or return to one you already joined.";
+      } else if (hubProfileLoading && !hubProfileSummary) {
+        profileLine.textContent = "Loading room directory...";
+      } else if (hubProfileError && !hubProfileSummary) {
+        profileLine.textContent = hubProfileError;
+      } else if (hubProfileSummary?.profile) {
+        const sections = getHomeDirectorySections();
+        const roomCount =
+          sections.openRooms.length +
+          sections.activeRooms.length +
+          sections.archivedRooms.length;
+        profileLine.textContent =
+          "Profile " +
+          String(hubProfileSummary.profile.displayName || "Player") +
+          " | Directory " +
+          String(roomCount);
+      } else {
+        profileLine.textContent = "Browse open games or return to one you already joined.";
+      }
+    }
+    if (refreshStatusNode) {
+      refreshStatusNode.style.display =
+        hubProfileLoading || homeDirectoryStale ? "flex" : "none";
+      refreshStatusNode.textContent = hubProfileLoading
+        ? "Refreshing room directory..."
+        : "Room directory will refresh when you return home.";
+    }
+    if (hubProfileLoading && !hubProfileSummary) {
+      body.innerHTML = "<div class='mp-room-directory-empty'>Loading rooms...</div>";
       return;
     }
-    if (roomDirectoryError && roomDirectoryRows.length === 0) {
+    if (hubProfileError && !hubProfileSummary) {
       body.innerHTML =
-        "<tr><td colspan='4'>" + String(roomDirectoryError) + "</td></tr>";
+        "<div class='mp-room-directory-empty'>" +
+        escapeHtml(String(hubProfileError || "Could not load rooms")) +
+        "</div>";
       return;
     }
-    const openRooms = Array.isArray(roomDirectoryRows)
-      ? roomDirectoryRows.filter((room) => {
-          const status = String(room?.status || "").toLowerCase();
-          return status === "lobby" && Boolean(room?.joinable);
-        })
-      : [];
-    if (openRooms.length === 0) {
-      body.innerHTML = "<tr><td colspan='4'>No open rooms</td></tr>";
-      return;
-    }
-    body.innerHTML = openRooms
-      .map((room) => {
-        const roomCode = normalizeRoomCode(room.code);
-        const roomDisplayName = escapeHtml(
-          formatRoomDisplayName(roomCode, room?.displayName),
-        );
-        const pill = resolveSidebarStatusPill({
-          roomCode,
-          status: room.status,
-        });
+    const sections = getHomeDirectorySections();
+    const getDirectoryGridClassName = (rooms) => {
+      const count = Array.isArray(rooms) ? rooms.length : 0;
+      const normalizedCount = Math.max(0, Math.min(4, count));
+      return (
+        "mp-room-directory-grid mp-room-directory-grid--count-" +
+        String(normalizedCount)
+      );
+    };
+    const renderRoomCards = (rooms, emptyLabel, optionsInput) => {
+      const options =
+        optionsInput && typeof optionsInput === "object" ? optionsInput : {};
+      const allowDeleteHistory = Boolean(options.allowDeleteHistory);
+      if (!Array.isArray(rooms) || rooms.length === 0) {
         return (
-          "<tr>" +
-          "<td><strong>" +
-          roomDisplayName +
-          "</strong></td>" +
-          "<td>" +
-          String(room.playerCount || 0) +
-          "/" +
-          String(room.maxPlayers || 5) +
-          "</td>" +
-          "<td><span class='mp-room-status-pill mp-room-status-pill--" +
-          escapeHtml(pill.key) +
-          "'>" +
-          escapeHtml(pill.label) +
-          "</span></td>" +
-          "<td><button type='button' data-action='join-listed-room' data-room-code='" +
-          String(room.code || "") +
-          "'>Join</button></td>" +
-          "</tr>"
+          "<div class='mp-room-directory-empty'>" +
+          escapeHtml(emptyLabel) +
+          "</div>"
         );
-      })
-      .join("");
+      }
+      return rooms
+        .map((room) => {
+          const roomDisplayName = escapeHtml(
+            formatRoomDisplayName(room.roomCode, room.roomDisplayName),
+          );
+          const pill = resolveSidebarStatusPill(room);
+          const players =
+            room.playerCount === null || room.maxPlayers === null
+              ? "Unknown"
+              : String(room.playerCount) + "/" + String(room.maxPlayers);
+          const hostLabel = escapeHtml(room.hostName || "Host");
+          const actions = resolveHubRoomActions(room);
+          const secondaryButton = actions.canAbandon
+            ? "<button type='button' class='button-destructive' data-action='home-room-abandon' data-room-code='" +
+              escapeHtml(room.roomCode) +
+              "'>" +
+              escapeHtml(actions.abandonLabel) +
+              "</button>"
+            : "";
+          const deleteButton =
+            allowDeleteHistory
+              ? "<button type='button' class='button-secondary' data-action='home-room-delete-history' data-room-code='" +
+                escapeHtml(room.roomCode) +
+                "'>Delete</button>"
+              : "";
+          const primaryButton = actions.canOpen
+            ? "<button type='button' data-action='home-room-open' data-room-code='" +
+              escapeHtml(room.roomCode) +
+              "'>" +
+              escapeHtml(actions.openLabel) +
+              "</button>"
+            : "";
+          return (
+            "<article class='mp-room-card'>" +
+            "<div class='mp-room-card__head'>" +
+            "<div>" +
+            "<h3>" +
+            roomDisplayName +
+            "</h3>" +
+            "<p class='mp-status-line'>Host " +
+            hostLabel +
+            "</p>" +
+            "</div>" +
+            "<span class='mp-room-status-pill mp-room-status-pill--" +
+            escapeHtml(pill.key) +
+            "'>" +
+            escapeHtml(pill.label) +
+            "</span>" +
+            "</div>" +
+            "<div class='mp-room-card__meta'>" +
+            "<span>Players " +
+            escapeHtml(players) +
+            "</span>" +
+            "<span>Created " +
+            escapeHtml(formatHubTimestamp(room.createdAt || room.activityAt)) +
+            "</span>" +
+            "</div>" +
+            "<p class='mp-status-line'>" +
+            escapeHtml(resolveHubRoomActions(room).hint) +
+            "</p>" +
+            "<div class='mp-room-card__actions'>" +
+            primaryButton +
+            secondaryButton +
+            deleteButton +
+            "</div>" +
+            "</article>"
+          );
+        })
+        .join("");
+    };
+    body.innerHTML =
+      "<section class='mp-room-directory-section'>" +
+      "<div class='mp-room-directory-section__head'><h3>Open</h3><p>Joinable lobbies</p></div>" +
+      "<div class='" + getDirectoryGridClassName(sections.openRooms) + "'>" +
+      renderRoomCards(sections.openRooms, "No open rooms") +
+      "</div></section>" +
+      "<section class='mp-room-directory-section'>" +
+      "<div class='mp-room-directory-section__head'><h3>Active</h3><p>Your live games and reconnects</p></div>" +
+      "<div class='" + getDirectoryGridClassName(sections.activeRooms) + "'>" +
+      renderRoomCards(sections.activeRooms, "No active rooms") +
+      "</div></section>" +
+      "<section class='mp-room-directory-section'>" +
+      "<div class='mp-room-directory-section__head'><h3>Archived</h3><p>Finished or exited rooms relevant to you</p></div>" +
+      "<div class='" + getDirectoryGridClassName(sections.archivedRooms) + "'>" +
+      renderRoomCards(sections.archivedRooms, "No archived rooms", {
+        allowDeleteHistory: true,
+      }) +
+      "</div></section>";
   }
 
   async function refreshRoomDirectory(force) {
-    if (!isAuthenticated()) {
-      roomDirectoryRows = [];
-      roomDirectoryLoading = false;
-      roomDirectoryError = "";
-      renderRoomDirectory();
-      return;
-    }
-    if (typeof fetch !== "function") {
-      roomDirectoryRows = [];
-      roomDirectoryError = "Room list unavailable";
-      renderRoomDirectory();
-      return;
-    }
-    const now = Date.now();
-    if (roomDirectoryLoading) {
-      return;
-    }
-    if (!force && now - roomDirectoryLastFetchAt < 4000) {
-      return;
-    }
-    roomDirectoryLoading = true;
-    roomDirectoryError = "";
-    renderRoomDirectory();
-    const candidates = buildRoomDirectoryCandidates(multiplayerState.url).map(
-      (baseUrl) => {
-        return baseUrl + "?t=" + String(now);
-      },
-    );
-    try {
-      const result = await fetchFirstJsonFromCandidates(candidates);
-      if (!result.ok) {
-        roomDirectoryError = String(result.error || "Could not load rooms");
-      } else {
-        const payload = result.payload || {};
-        roomDirectoryRows = (
-          Array.isArray(payload.roomList) ? payload.roomList : []
-        ).filter((room) => {
-          const status = String(room?.status || "").toLowerCase();
-          return status === "lobby" && Boolean(room?.joinable);
-        });
-        roomDirectoryRows.forEach((room) => {
-          rememberRoomDisplayName(room?.code, room?.displayName);
-        });
-        roomDirectoryLastFetchAt = Date.now();
-        roomDirectoryError = "";
-      }
-    } catch (error) {
-      roomDirectoryError = String(error?.message || "Could not load rooms");
-    } finally {
-      roomDirectoryLoading = false;
-      renderRoomDirectory();
-    }
+    await refreshPlayerHub(force);
   }
 
   function stopHubAutoRefresh() {
@@ -2532,7 +2935,10 @@
       return;
     }
     hubAutoRefreshTimer = globalScope.setInterval(() => {
-      if (!isAuthenticated() || hasActiveMultiplayerRoom()) {
+      if (
+        !isAuthenticated() ||
+        String(currentRoute?.name || "") !== "home"
+      ) {
         return;
       }
       refreshPlayerHub(false);
@@ -2596,6 +3002,39 @@
     const candidates = buildApiCandidates(
       multiplayerState.url,
       "/api/profile/reset?profileToken=" + encodedToken + "&t=" + String(now),
+    );
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          continue;
+        }
+        return true;
+      } catch (_error) {}
+    }
+    return false;
+  }
+
+  async function deleteProfileRoomHistoryOnServer(roomCodeInput) {
+    const profileToken = String(multiplayerState.profileToken || "").trim();
+    const roomCode = normalizeRoomCode(roomCodeInput);
+    if (!profileToken || !roomCode || typeof fetch !== "function") {
+      return false;
+    }
+    const now = Date.now();
+    const encodedToken = encodeURIComponent(profileToken);
+    const encodedRoomCode = encodeURIComponent(roomCode);
+    const candidates = buildApiCandidates(
+      multiplayerState.url,
+      "/api/profile/rooms/" +
+        encodedRoomCode +
+        "/delete?profileToken=" +
+        encodedToken +
+        "&t=" +
+        String(now),
     );
     for (const url of candidates) {
       try {
@@ -2727,224 +3166,15 @@
     return Boolean(hostPlayerId && myPlayerId && hostPlayerId === myPlayerId);
   }
 
-  function getHubRoomSortPriority(roomInput) {
-    const room = roomInput && typeof roomInput === "object" ? roomInput : {};
-    const primary = resolveSidebarStatusPill(room);
-    const hosting = isRoomHostedByCurrentPlayer(room);
-    if (hosting && primary.key === "pending-start") {
-      return 0;
-    }
-    if (primary.key === "waiting-you") {
-      return 1;
-    }
-    if (primary.key === "waiting-others" || primary.key === "pending-start") {
-      return 2;
-    }
-    if (primary.key === "finished") {
-      return 3;
-    }
-    return 4;
-  }
-
   function createHubRoomList() {
-    const roomsByCode = new Map();
-    const upsertRoom = (roomCodeInput, patchInput) => {
-      const roomCode = normalizeRoomCode(roomCodeInput);
-      if (!roomCode) {
-        return;
-      }
-      const patch =
-        patchInput && typeof patchInput === "object" ? patchInput : {};
-      const previous = roomsByCode.get(roomCode) || {
-        roomCode,
-        roomDisplayName: "",
-        status: "unknown",
-        playerCount: null,
-        maxPlayers: null,
-        hostPlayerId: "",
-        hostName: "",
-        joinable: false,
-        listed: false,
-        inProfileRecent: false,
-        inProfileActive: false,
-        currentJoined: false,
-        hasReconnectSession: false,
-        connected: null,
-        myEndedTurn: null,
-        myPlayerId: "",
-        myPlayerName: "",
-        removedByAction: "",
-        activityAt: 0,
-        createdAt: 0,
-      };
-      const nextActivityAt = Math.max(
-        Number(previous.activityAt || 0),
-        Number(patch.activityAt || 0),
-        Number(patch.updatedAt || 0),
-        Number(patch.lastSeenAt || 0),
-      );
-      const nextCreatedAt = Math.max(
-        Number(previous.createdAt || 0),
-        Number(patch.createdAt || 0),
-      );
-      const readBooleanPatch = (key) => {
-        if (Object.prototype.hasOwnProperty.call(patch, key)) {
-          return Boolean(patch[key]);
-        }
-        return Boolean(previous[key]);
-      };
-      roomsByCode.set(roomCode, {
-        ...previous,
-        ...patch,
-        roomCode,
-        roomDisplayName: String(
-          patch.roomDisplayName || previous.roomDisplayName || "",
-        ),
-        status: String(patch.status || previous.status || "unknown"),
-        joinable: readBooleanPatch("joinable"),
-        hasReconnectSession: readBooleanPatch("hasReconnectSession"),
-        listed: readBooleanPatch("listed"),
-        inProfileRecent: readBooleanPatch("inProfileRecent"),
-        inProfileActive: readBooleanPatch("inProfileActive"),
-        currentJoined: readBooleanPatch("currentJoined"),
-        activityAt: nextActivityAt,
-        createdAt: nextCreatedAt,
-      });
-    };
-
-    const knownSessions = normalizeRoomSessionMap(
-      multiplayerState.roomSessionsByCode,
-    );
-    const getKnownSession = (roomCodeInput) => {
-      const roomCode = normalizeRoomCode(roomCodeInput);
-      if (!roomCode) {
-        return null;
-      }
-      return knownSessions[roomCode] || null;
-    };
-
-    const activeRooms = Array.isArray(hubProfileSummary?.activeRooms)
-      ? hubProfileSummary.activeRooms
+    const rooms = Array.isArray(hubProfileSummary?.directory?.activeRooms)
+      ? hubProfileSummary.directory.activeRooms
+      : Array.isArray(hubProfileSummary?.rooms)
+        ? hubProfileSummary.rooms
       : [];
-    activeRooms.forEach((room) => {
-      const knownSession = getKnownSession(room?.roomCode);
-      const playerId = String(room?.playerId || "");
-      const playerName = sanitizeDisplayName(room?.playerName || "");
-      upsertRoom(room?.roomCode, {
-        roomDisplayName: String(room?.roomDisplayName || ""),
-        status: String(room?.roomStatus || "in_game"),
-        inProfileActive: true,
-        hasReconnectSession: Boolean(knownSession?.reconnectToken),
-        connected: Object.prototype.hasOwnProperty.call(room || {}, "connected")
-          ? Boolean(room.connected)
-          : null,
-        myEndedTurn:
-          typeof room?.endedTurn === "boolean" ? Boolean(room.endedTurn) : null,
-        myPlayerId: playerId || String(knownSession?.playerId || ""),
-        myPlayerName:
-          playerName ||
-          toPlayerSeatLabel(playerId || String(knownSession?.playerId || "")),
-        activityAt: Number(
-          room?.updatedAt || room?.joinedAt || knownSession?.updatedAt || 0,
-        ),
-      });
-    });
-
-    const directoryRooms = Array.isArray(roomDirectoryRows)
-      ? roomDirectoryRows
-      : [];
-    directoryRooms.forEach((room) => {
-      const knownSession = getKnownSession(room?.code);
-      const hostPlayerId = String(room?.hostPlayerId || "");
-      const hostName = sanitizeDisplayName(room?.hostName || "");
-      upsertRoom(room?.code, {
-        roomDisplayName: String(room?.displayName || ""),
-        status: String(room?.status || "unknown"),
-        playerCount: Number.isFinite(Number(room?.playerCount))
-          ? Number(room.playerCount)
-          : null,
-        maxPlayers: Number.isFinite(Number(room?.maxPlayers))
-          ? Number(room.maxPlayers)
-          : null,
-        hostPlayerId,
-        hostName:
-          hostName || (hostPlayerId ? toPlayerSeatLabel(hostPlayerId) : ""),
-        hasReconnectSession: Boolean(knownSession?.reconnectToken),
-        joinable: Boolean(room?.joinable),
-        listed: true,
-        activityAt: Number(room?.updatedAt || 0),
-        createdAt: Number(room?.createdAt || 0),
-      });
-    });
-
-    if (multiplayerState.room && multiplayerState.room.code) {
-      const room = multiplayerState.room;
-      const players = Array.isArray(room.players) ? room.players : [];
-      const hostPlayer = players.find(
-        (player) =>
-          String(player?.playerId || "") === String(room.hostPlayerId || ""),
-      );
-      const myPlayer = players.find(
-        (player) =>
-          String(player?.playerId || "") ===
-          String(multiplayerState.playerId || ""),
-      );
-      upsertRoom(room.code, {
-        roomDisplayName: String(room.displayName || ""),
-        status: String(room.status || "unknown"),
-        playerCount: players.length,
-        maxPlayers: Number.isFinite(Number(room.maxPlayers))
-          ? Number(room.maxPlayers)
-          : null,
-        hostPlayerId: String(room.hostPlayerId || ""),
-        hostName:
-          sanitizeDisplayName(hostPlayer?.name || "") ||
-          toPlayerSeatLabel(room.hostPlayerId),
-        currentJoined: true,
-        joinable: String(room.status || "").toLowerCase() === "lobby",
-        hasReconnectSession: Boolean(multiplayerState.reconnectToken),
-        connected: true,
-        myEndedTurn: (() => {
-          const me = players.find(
-            (player) =>
-              String(player?.playerId || "") ===
-              String(multiplayerState.playerId || ""),
-          );
-          return me ? Boolean(me.endedTurn) : null;
-        })(),
-        myPlayerId: String(multiplayerState.playerId || ""),
-        myPlayerName:
-          sanitizeDisplayName(myPlayer?.name || "") ||
-          toPlayerSeatLabel(multiplayerState.playerId),
-        activityAt: Number(room.updatedAt || Date.now()),
-        createdAt: Number(room.createdAt || 0),
-      });
-    }
-
-    const list = Array.from(roomsByCode.values()).map((room) => {
-      const status = String(room.status || "unknown").toLowerCase();
-      const profileKnown = Boolean(
-        room.inProfileActive || room.inProfileRecent || room.currentJoined,
-      );
-      const sortGroup = getHubRoomSortPriority({
-        ...room,
-        status,
-      });
-      return {
-        ...room,
-        status,
-        profileKnown,
-        sortGroup,
-        isHosting: isRoomHostedByCurrentPlayer(room),
-      };
-    });
-    list.sort((a, b) => {
-      if (a.sortGroup !== b.sortGroup) {
-        return a.sortGroup - b.sortGroup;
-      }
-      return Number(b.activityAt || 0) - Number(a.activityAt || 0);
-    });
-    return list;
+    return rooms
+      .map((room) => createDirectoryRoomRecord(room))
+      .filter(Boolean);
   }
 
   function ensureHubSelection(hubRooms) {
@@ -3003,9 +3233,19 @@
     const encodedToken = encodeURIComponent(
       String(multiplayerState.profileToken || ""),
     );
+    const encodedCurrentRoomCode = encodeURIComponent(
+      normalizeRoomCode(
+        multiplayerState.room?.code || multiplayerState.roomCode || "",
+      ),
+    );
     const candidates = buildApiCandidates(
       multiplayerState.url,
-      "/api/profile?profileToken=" + encodedToken + "&t=" + String(now),
+      "/api/profile?profileToken=" +
+        encodedToken +
+        "&currentRoomCode=" +
+        encodedCurrentRoomCode +
+        "&t=" +
+        String(now),
     );
     try {
       const result = await fetchFirstJsonFromCandidates(candidates);
@@ -3024,16 +3264,23 @@
         const payload = result.payload || {};
         hubProfileSummary = {
           profile: payload.profile || null,
+          directory:
+            payload.directory && typeof payload.directory === "object"
+              ? payload.directory
+              : { openRooms: [], activeRooms: [], archivedRooms: [] },
+          rooms: Array.isArray(payload.rooms) ? payload.rooms : [],
           activeRooms: Array.isArray(payload.activeRooms)
             ? payload.activeRooms
             : [],
           recentRooms: Array.isArray(payload.recentRooms)
             ? payload.recentRooms
             : [],
+          version: Number(payload.version || 0),
           serverTime: Number(payload.serverTime || now),
         };
         hubProfileLastFetchAt = Date.now();
         hubProfileError = "";
+        homeDirectoryStale = false;
       }
     } catch (error) {
       hubProfileError = String(error?.message || "Could not load profile");
@@ -3049,22 +3296,40 @@
       roomDirectoryError = "";
       hubProfileSummary = null;
       hubProfileError = "";
+      homeDirectoryStale = false;
+      maybeResolveSidebarRefreshPending({ force: true });
       renderMultiplayerUi();
       return;
     }
-    await Promise.all([
-      refreshRoomDirectory(force),
-      refreshHubProfileSummary(force),
-    ]);
-    pruneStaleRoomSessions({
-      authoritative: Boolean(hubProfileSummary && !hubProfileError),
-      activeRoomCodes: Array.isArray(hubProfileSummary?.activeRooms)
-        ? hubProfileSummary.activeRooms.map((room) => room?.roomCode)
-        : [],
-    });
-    const rooms = createHubRoomList();
-    ensureHubSelection(rooms);
-    renderMultiplayerUi();
+    try {
+      await refreshHubProfileSummary(force);
+      pruneStaleRoomSessions({
+        authoritative: Boolean(hubProfileSummary && !hubProfileError),
+        activeRoomCodes: Array.isArray(hubProfileSummary?.rooms)
+          ? hubProfileSummary.rooms.map((room) => room?.roomCode)
+          : [],
+      });
+      const rooms = createHubRoomList();
+      const selection = ensureHubSelection(rooms);
+      if (
+        String(currentRoute?.name || "") === "hub" &&
+        !hasActiveMultiplayerRoom()
+      ) {
+        navigateToRoute(
+          { name: "home", roomCode: "" },
+          { render: false, replace: true },
+        );
+      }
+    } finally {
+      hubRefreshVersion = Math.max(
+        Number(hubRefreshVersion || 0) + 1,
+        Number(hubProfileSummary?.version || 0),
+      );
+      maybeResolveSidebarRefreshPending({
+        hasError: Boolean(hubProfileError),
+      });
+      renderMultiplayerUi();
+    }
   }
 
   function animateHubRoomListReorder(containerInput, previousTopByCodeInput) {
@@ -3117,27 +3382,24 @@
     if (typeof document === "undefined") {
       return;
     }
-    const profileLine = document.getElementById("hub-profile-line");
-    const roomListNode = document.getElementById("mp-hub-room-list");
-    const homeNavNode = document.getElementById("home-sidebar-home");
     const roomTitleNode = document.getElementById("mp-hub-room-title");
     const roomMetaNode = document.getElementById("mp-hub-room-meta");
     const roomOpenButton = document.getElementById("home-room-open");
     const roomAbandonButton = document.getElementById("home-room-abandon");
+    const roomDeleteHistoryButton = document.getElementById(
+      "home-room-delete-history-inline",
+    );
     const roomActionHintNode = document.getElementById("home-room-action-hint");
     const roomSummaryNode = document.getElementById("mp-hub-room-summary");
     const roomPlayersBodyNode = document.getElementById(
       "mp-hub-room-player-table-body",
     );
-    const effectiveStep = resolveHomeStep();
     if (
-      !profileLine ||
-      !roomListNode ||
-      !homeNavNode ||
       !roomTitleNode ||
       !roomMetaNode ||
       !roomOpenButton ||
       !roomAbandonButton ||
+      !roomDeleteHistoryButton ||
       !roomActionHintNode ||
       !roomSummaryNode ||
       !roomPlayersBodyNode
@@ -3145,129 +3407,27 @@
       return;
     }
 
-    if (
-      homeNavNode.classList &&
-      typeof homeNavNode.classList.toggle === "function"
-    ) {
-      homeNavNode.classList.toggle(
-        "home-sidebar__nav-item--active",
-        effectiveStep === "mode",
-      );
-    }
-
-    if (!multiplayerState.profileToken) {
-      profileLine.textContent = "Rooms you started or joined appear here.";
-    } else if (hubProfileLoading && !hubProfileSummary) {
-      profileLine.textContent = "Loading profile summary...";
-    } else if (hubProfileError && !hubProfileSummary) {
-      profileLine.textContent = hubProfileError;
-    } else if (hubProfileSummary?.profile) {
-      const activeCount = Array.isArray(hubProfileSummary.activeRooms)
-        ? hubProfileSummary.activeRooms.length
-        : 0;
-      const recentCount = Array.isArray(hubProfileSummary.recentRooms)
-        ? hubProfileSummary.recentRooms.length
-        : 0;
-      profileLine.textContent =
-        "Profile " +
-        String(hubProfileSummary.profile.displayName || "Player") +
-        " | Active " +
-        String(activeCount) +
-        " | Recent " +
-        String(recentCount);
-    } else {
-      profileLine.textContent = "Rooms you started or joined appear here.";
-    }
-
-    const rooms = createHubRoomList();
-    const selection = ensureHubSelection(rooms);
-    const selectedCode = selection.selectedCode;
-    const selectedRoom =
-      rooms.find((room) => room.roomCode === selectedCode) || null;
-
-    const renderRoomButtons = (collection) => {
-      if (!Array.isArray(collection) || collection.length === 0) {
-        return "<div class='mp-hub-room-list__empty'>None</div>";
-      }
-      return collection
-        .map((room) => {
-          const isSelected =
-            effectiveStep === "room-list" && room.roomCode === selectedCode;
-          const code = escapeHtml(room.roomCode);
-          const roomDisplayName = escapeHtml(
-            formatRoomDisplayName(room.roomCode, room.roomDisplayName),
-          );
-          const primaryPill = resolveSidebarStatusPill(room);
-          const hostingPill = room.isHosting
-            ? "<span class='mp-room-status-pill mp-room-status-pill--hosting'>Hosting</span>"
-            : "";
-          const players =
-            room.playerCount === null || room.maxPlayers === null
-              ? "-"
-              : String(room.playerCount) + "/" + String(room.maxPlayers);
-          const updatedAt =
-            Number(room.activityAt || 0) > 0
-              ? "Updated " + escapeHtml(formatHubTimestamp(room.activityAt))
-              : "Updated recently";
-          const itemClass =
-            "mp-hub-room-item" +
-            (isSelected ? " mp-hub-room-item--selected" : "");
-          return (
-            "<a class='" +
-            itemClass +
-            "' role='button' tabindex='0' data-action='hub-select-room' data-room-code='" +
-            code +
-            "'>" +
-            "<span class='mp-hub-room-item__title'>" +
-            roomDisplayName +
-            "</span>" +
-            "<span class='mp-hub-room-item__line'>" +
-            "<span class='mp-hub-room-item__pill-row'>" +
-            "<span class='mp-room-status-pill mp-room-status-pill--" +
-            escapeHtml(primaryPill.key) +
-            "'>" +
-            escapeHtml(primaryPill.label) +
-            "</span>" +
-            hostingPill +
-            "</span>" +
-            "</span>" +
-            "</a>"
-          );
-        })
-        .join("");
-    };
-
-    const previousTopByCode = new Map();
-    Array.from(roomListNode.querySelectorAll("a[data-room-code]")).forEach(
-      (node) => {
-        const roomCode = normalizeRoomCode(
-          node.getAttribute("data-room-code") || "",
-        );
-        if (!roomCode) {
-          return;
-        }
-        previousTopByCode.set(
-          roomCode,
-          Number(node.getBoundingClientRect().top),
-        );
-      },
+    const selectedCode = normalizeRoomCode(
+      currentRoute?.roomCode ||
+        multiplayerState.room?.code ||
+        multiplayerState.roomCode ||
+        "",
     );
-    roomListNode.innerHTML = renderRoomButtons(
-      rooms.filter((room) => room.currentJoined || room.inProfileActive),
-    );
-    animateHubRoomListReorder(roomListNode, previousTopByCode);
+    const selectedRoom = findHomeDirectoryRoom(selectedCode);
 
     if (!selectedRoom) {
-      roomTitleNode.textContent = "Select a room";
+      roomTitleNode.textContent = "Room unavailable";
       roomMetaNode.textContent =
-        "Pick a room from the sidebar to review details.";
+        "Return home to browse open, active, or archived rooms.";
       roomOpenButton.disabled = true;
       roomOpenButton.textContent = "Primary Action";
       roomAbandonButton.disabled = true;
       roomAbandonButton.textContent = "Abandon Game";
-      roomActionHintNode.textContent = "Select a room to open or abandon.";
+      roomDeleteHistoryButton.disabled = true;
+      roomDeleteHistoryButton.style.display = "none";
+      roomActionHintNode.textContent = "This room is not available in your directory right now.";
       roomSummaryNode.innerHTML =
-        "<p class='mp-status-line'>No room selected.</p>";
+        "<p class='mp-status-line'>Room details are unavailable.</p>";
       roomPlayersBodyNode.innerHTML =
         "<tr><td colspan='6'>No player data available.</td></tr>";
       return;
@@ -3277,6 +3437,10 @@
       multiplayerState.room?.code || multiplayerState.roomCode,
     );
     const isCurrentRoom = selectedRoom.roomCode === currentRoomCode;
+    const sections = getHomeDirectorySections();
+    const isArchivedRoom = sections.archivedRooms.some(
+      (room) => room.roomCode === selectedRoom.roomCode,
+    );
     const actions = resolveHubRoomActions(selectedRoom);
     const statusLabel = toRoomStatusLabel(selectedRoom.status);
     const summaryPlayerCount = selectedRoom.playerCount;
@@ -3305,6 +3469,8 @@
     roomOpenButton.textContent = actions.openLabel;
     roomAbandonButton.disabled = !actions.canAbandon;
     roomAbandonButton.textContent = actions.abandonLabel;
+    roomDeleteHistoryButton.disabled = !isArchivedRoom;
+    roomDeleteHistoryButton.style.display = isArchivedRoom ? "" : "none";
     roomActionHintNode.textContent = actions.hint;
     const currentRoomTurn = multiplayerState.room?.turn || null;
     const waitingOn = Array.isArray(multiplayerState.room?.players)
@@ -3450,7 +3616,7 @@
     );
     const reconnectToken = getReconnectTokenForRoom(selectedRoom.roomCode);
     const hasReconnectSession = Boolean(
-      reconnectToken || selectedRoom.hasReconnectSession,
+      reconnectToken || selectedRoom.canReconnect,
     );
     const status = String(selectedRoom.status || "").toLowerCase();
     const isCurrentRoom =
@@ -3471,7 +3637,7 @@
     const canSwitchContext = Boolean(
       isCurrentRoom ||
       hasReconnectSession ||
-      selectedRoom.inProfileActive ||
+      selectedRoom.myPlayerId ||
       (status === "lobby" && selectedRoom.joinable),
     );
     const canAbandon = Boolean(
@@ -3487,6 +3653,26 @@
           canAbandon,
           abandonLabel: "Abandon Game",
           hint: "Host abandon deletes the room for all players.",
+        };
+      }
+      if (canSwitchContext) {
+        return {
+          canOpen: true,
+          openLabel: "Open Room",
+          openIntent: "open_room",
+          canAbandon,
+          abandonLabel: "Abandon Game",
+          hint: "Open this lobby to review players and room details.",
+        };
+      }
+      if (selectedRoom.joinable) {
+        return {
+          canOpen: true,
+          openLabel: "Join Room",
+          openIntent: "join_room",
+          canAbandon: false,
+          abandonLabel: "Abandon Game",
+          hint: "Join this lobby from the home directory.",
         };
       }
       return {
@@ -3580,9 +3766,11 @@
       return;
     }
     const rooms = createHubRoomList();
-    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedCode = getCurrentOrSelectedRoomCode();
     const selectedRoom =
-      rooms.find((room) => room.roomCode === selectedCode) || null;
+      findHomeDirectoryRoom(selectedCode) ||
+      rooms.find((room) => room.roomCode === selectedCode) ||
+      null;
     if (!selectedRoom) {
       return;
     }
@@ -3593,6 +3781,7 @@
       return;
     }
     if (actions.openIntent !== "start_game") {
+      beginSidebarRefreshPending("Updating rooms...");
       await openSelectedHubRoom();
       return;
     }
@@ -3615,6 +3804,16 @@
       multiplayerState.room?.code || multiplayerState.roomCode,
     );
     forceHomeSurface = false;
+    beginSidebarRefreshPending("Starting room...");
+    navigateToRoute(
+      {
+        name: "room-game",
+        roomCode: normalizeRoomCode(
+          multiplayerState.room?.code || multiplayerState.roomCode,
+        ),
+      },
+      { render: false },
+    );
     setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
     await sendMultiplayerCommand(
       "start_game",
@@ -3631,8 +3830,7 @@
       return;
     }
     hubSelectedRoomCode = roomCode;
-    setHomeStep("room-list");
-    renderMultiplayerUi();
+    navigateToRoute({ name: "room", roomCode });
   }
 
   async function openSelectedHubRoom() {
@@ -3641,9 +3839,11 @@
       return false;
     }
     const rooms = createHubRoomList();
-    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedCode = getCurrentOrSelectedRoomCode();
     const selectedRoom =
-      rooms.find((room) => room.roomCode === selectedCode) || null;
+      findHomeDirectoryRoom(selectedCode) ||
+      rooms.find((room) => room.roomCode === selectedCode) ||
+      null;
     if (!selectedRoom) {
       return;
     }
@@ -3653,6 +3853,7 @@
       renderMultiplayerUi();
       return;
     }
+    beginSidebarRefreshPending("Updating rooms...");
 
     const currentRoomCode = normalizeRoomCode(
       multiplayerState.room?.code || multiplayerState.roomCode,
@@ -3669,13 +3870,20 @@
       ) {
         gameSurfaceRoomCode = selectedRoom.roomCode;
         forceHomeSurface = false;
+        navigateToRoute(
+          { name: "room-game", roomCode: selectedRoom.roomCode },
+          { render: false },
+        );
         setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
         renderState();
         return true;
       } else {
         gameSurfaceRoomCode = "";
         forceHomeSurface = true;
-        setHomeStep("room-list");
+        navigateToRoute(
+          { name: "room", roomCode: selectedRoom.roomCode },
+          { render: false },
+        );
         multiplayerClient.send("request_sync");
         return true;
       }
@@ -3717,7 +3925,16 @@
     const knownSession = getRoomSession(selectedRoom.roomCode);
     multiplayerState.playerId = String(knownSession?.playerId || "");
     persistMultiplayerState();
-    setHomeStep("room-list");
+    navigateToRoute(
+      {
+        name:
+          String(selectedRoom.status || "").toLowerCase() === "in_game"
+            ? "room-game"
+            : "room",
+        roomCode: selectedRoom.roomCode,
+      },
+      { render: false },
+    );
     renderMultiplayerUi();
     await ensureMultiplayerConnection();
     const payload = {
@@ -3735,7 +3952,10 @@
       multiplayerState.lastError = "not_connected";
       gameSurfaceRoomCode = "";
       forceHomeSurface = true;
-      setHomeStep("room-list");
+      navigateToRoute(
+        { name: "room", roomCode: selectedRoom.roomCode },
+        { render: false },
+      );
       renderMultiplayerUi();
       return false;
     }
@@ -3752,6 +3972,15 @@
         multiplayerState.room?.code || multiplayerState.roomCode,
       );
       forceHomeSurface = false;
+      navigateToRoute(
+        {
+          name: "room-game",
+          roomCode: normalizeRoomCode(
+            multiplayerState.room?.code || multiplayerState.roomCode,
+          ),
+        },
+        { render: false },
+      );
       setSectionViewsToPlayer(getPreferredSectionViewPlayerId());
       renderState();
     }
@@ -3765,9 +3994,11 @@
       return;
     }
     const rooms = createHubRoomList();
-    const selectedCode = normalizeRoomCode(hubSelectedRoomCode);
+    const selectedCode = getCurrentOrSelectedRoomCode();
     const selectedRoom =
-      rooms.find((room) => room.roomCode === selectedCode) || null;
+      findHomeDirectoryRoom(selectedCode) ||
+      rooms.find((room) => room.roomCode === selectedCode) ||
+      null;
     if (!selectedRoom) {
       return;
     }
@@ -3793,6 +4024,7 @@
       if (!confirmedHost) {
         return;
       }
+      beginSidebarRefreshPending("Updating rooms...");
       await sendMultiplayerCommand(
         "terminate_room",
         {},
@@ -3810,6 +4042,7 @@
     if (!confirmedLeave) {
       return;
     }
+    beginSidebarRefreshPending("Updating rooms...");
     const sent = await sendMultiplayerCommand(
       "leave_room",
       {},
@@ -3823,6 +4056,9 @@
   }
 
   function renderMultiplayerUi() {
+    if (typeof document === "undefined") {
+      return;
+    }
     renderAuthUi();
     const connectionNode = document.getElementById("mp-connection-status");
     if (connectionNode) {
@@ -4072,6 +4308,7 @@
       }
     }
     multiplayerState.lastError = errorMessage;
+    clearSidebarRefreshPending();
     renderMultiplayerUi();
     loggerService.logEvent("warn", "Multiplayer command failed to send", {
       type: String(type || ""),
@@ -5036,12 +5273,21 @@
       forceHomeSurface = false;
       appliedServerTurnKey = "";
       awaitingRoomStateRecovery = true;
-      homeStep = "room-list";
+      navigateToRoute(
+        {
+          name: "room",
+          roomCode: normalizeRoomCode(multiplayerState.roomCode),
+        },
+        { render: false, replace: true },
+      );
       persistHomeUiState();
       persistMultiplayerState();
       queueAuthProfileSync("room_joined");
       gameStateService.update({ gameStarted: false });
       renderMultiplayerUi();
+      invalidateHomeDirectory({
+        immediate: String(currentRoute?.name || "") === "home",
+      });
       refreshPlayerHub(true);
       loggerService.logEvent("info", "Joined multiplayer room", {
         roomCode: multiplayerState.roomCode,
@@ -5115,10 +5361,22 @@
       const incomingRoomStatus = String(
         multiplayerState.room?.status || "",
       ).toLowerCase();
-      homeStep = "room-list";
       if (incomingRoomStatus === "lobby") {
         gameSurfaceRoomCode = "";
         forceHomeSurface = true;
+        navigateToRoute(
+          { name: "room", roomCode: resolvedRoomCode || hubSelectedRoomCode },
+          { render: false, replace: true },
+        );
+      } else if (
+        incomingRoomStatus === "in_game" &&
+        !forceHomeSurface &&
+        resolvedRoomCode
+      ) {
+        navigateToRoute(
+          { name: "room-game", roomCode: resolvedRoomCode },
+          { render: false, replace: true },
+        );
       }
       persistMultiplayerState();
       queueAuthProfileSync("room_state");
@@ -5149,6 +5407,9 @@
       }
       renderMultiplayerUi();
       renderState();
+      invalidateHomeDirectory({
+        immediate: String(currentRoute?.name || "") === "home",
+      });
       refreshPlayerHub(false);
       return;
     }
@@ -5195,6 +5456,9 @@
         roll: message.roll,
         source: "network",
       });
+      invalidateHomeDirectory({
+        immediate: String(currentRoute?.name || "") === "home",
+      });
       refreshPlayerHub(false);
       return;
     }
@@ -5220,6 +5484,9 @@
         source: "network",
       });
       renderMultiplayerUi();
+      invalidateHomeDirectory({
+        immediate: String(currentRoute?.name || "") === "home",
+      });
       refreshPlayerHub(true);
       return;
     }
@@ -8583,6 +8850,7 @@
           renderMultiplayerUi,
           refreshRoomDirectory,
           refreshPlayerHub,
+          beginSidebarRefreshPending,
           resetLocalMultiplayerMemory,
           setHomeStep,
           getDefaultPlayerName,
@@ -8625,6 +8893,78 @@
     });
   }
 
+  const homeRoomDirectory = document.getElementById("mp-room-directory");
+  if (homeRoomDirectory) {
+    homeRoomDirectory.addEventListener(
+      "click",
+      async function onHomeRoomDirectoryAction(event) {
+        const target = event.target;
+        if (
+          typeof globalScope.HTMLElement !== "undefined" &&
+          !(target instanceof globalScope.HTMLElement)
+        ) {
+          return;
+        }
+        const primaryButton = target.closest(
+          "button[data-action='home-room-open']",
+        );
+        if (primaryButton) {
+          const roomCode = normalizeRoomCode(
+            primaryButton.getAttribute("data-room-code") || "",
+          );
+          if (!roomCode) {
+            return;
+          }
+          hubSelectedRoomCode = roomCode;
+          navigateToRoute({ name: "room", roomCode }, { render: false });
+          await runSelectedHubPrimaryAction();
+          return;
+        }
+        const abandonButton = target.closest(
+          "button[data-action='home-room-abandon']",
+        );
+        if (abandonButton) {
+          const roomCode = normalizeRoomCode(
+            abandonButton.getAttribute("data-room-code") || "",
+          );
+          if (!roomCode) {
+            return;
+          }
+          hubSelectedRoomCode = roomCode;
+          navigateToRoute({ name: "room", roomCode }, { render: false });
+          await abandonSelectedHubRoom();
+          return;
+        }
+        const deleteButton = target.closest(
+          "button[data-action='home-room-delete-history']",
+        );
+        if (!deleteButton) {
+          return;
+        }
+        const roomCode = normalizeRoomCode(
+          deleteButton.getAttribute("data-room-code") || "",
+        );
+        if (!roomCode) {
+          return;
+        }
+        const confirmed =
+          typeof globalScope.confirm === "function"
+            ? globalScope.confirm(
+                "Delete this room from your room history?",
+              )
+            : true;
+        if (!confirmed) {
+          return;
+        }
+        const deleted = await deleteProfileRoomHistoryOnServer(roomCode);
+        if (deleted) {
+          invalidateHomeDirectory({ immediate: true });
+          await refreshPlayerHub(true);
+        }
+      },
+    );
+  }
+
   const homeRoomOpenButton = document.getElementById("home-room-open");
   if (homeRoomOpenButton) {
     homeRoomOpenButton.addEventListener(
@@ -8641,6 +8981,52 @@
       "click",
       async function onHomeRoomAbandonClick() {
         await abandonSelectedHubRoom();
+      },
+    );
+  }
+
+  const homeRoomBackButton = document.getElementById("home-room-back");
+  if (homeRoomBackButton) {
+    homeRoomBackButton.addEventListener("click", function onHomeRoomBack() {
+      navigateToRoute({ name: "home", roomCode: "" });
+    });
+  }
+
+  const homeRoomDeleteHistoryInlineButton = document.getElementById(
+    "home-room-delete-history-inline",
+  );
+  if (homeRoomDeleteHistoryInlineButton) {
+    homeRoomDeleteHistoryInlineButton.addEventListener(
+      "click",
+      async function onHomeRoomDeleteHistoryInlineClick() {
+        const roomCode = normalizeRoomCode(
+          currentRoute?.roomCode ||
+            multiplayerState.room?.code ||
+            multiplayerState.roomCode ||
+            "",
+        );
+        if (!roomCode) {
+          return;
+        }
+        const confirmed =
+          typeof globalScope.confirm === "function"
+            ? globalScope.confirm(
+                "Delete this room from your room history?",
+              )
+            : true;
+        if (!confirmed) {
+          return;
+        }
+        const deleted = await deleteProfileRoomHistoryOnServer(roomCode);
+        if (!deleted) {
+          multiplayerState.lastError =
+            "Could not delete this room from your history.";
+          renderMultiplayerUi();
+          return;
+        }
+        navigateToRoute({ name: "home" }, { render: false });
+        invalidateHomeDirectory({ immediate: true });
+        await refreshPlayerHub(true);
       },
     );
   }
@@ -8688,6 +9074,7 @@
         if (!confirmed) {
           return;
         }
+        beginSidebarRefreshPending("Updating rooms...");
         await sendMultiplayerCommand(
           "kick_player",
           { playerId },
@@ -8725,10 +9112,15 @@
       if (!hasJoinedMultiplayerRoom()) {
         return;
       }
-      gameSurfaceRoomCode = "";
-      forceHomeSurface = true;
-      setHomeStep("room-list");
-      renderState();
+      navigateToRoute(
+        {
+          name: "room",
+          roomCode: normalizeRoomCode(
+            multiplayerState.room?.code || multiplayerState.roomCode,
+          ),
+        },
+        { replace: true },
+      );
     });
   }
 
@@ -8746,6 +9138,7 @@
           if (!confirmedHost) {
             return;
           }
+          beginSidebarRefreshPending("Updating rooms...");
           await sendMultiplayerCommand(
             "terminate_room",
             {},
@@ -8762,6 +9155,7 @@
         if (!confirmedLeave) {
           return;
         }
+        beginSidebarRefreshPending("Updating rooms...");
         const sent = await sendMultiplayerCommand(
           "leave_room",
           {},
@@ -8831,6 +9225,7 @@
       const action = actionTarget.getAttribute("data-action");
       if (action === "mp-start-lobby") {
         logPlayerAction("Started room game", { action });
+        beginSidebarRefreshPending("Starting room...");
         multiplayerClient.send("start_game");
         return;
       }
@@ -8843,6 +9238,7 @@
           return;
         }
         logPlayerAction("Canceled multiplayer room", { action });
+        beginSidebarRefreshPending("Updating rooms...");
         multiplayerClient.send("terminate_room");
         return;
       }
@@ -8855,6 +9251,7 @@
           return;
         }
         logPlayerAction("Left multiplayer lobby", { action });
+        beginSidebarRefreshPending("Updating rooms...");
         multiplayerClient.send("leave_room");
         teardownMultiplayerSession("Left multiplayer room");
         return;
@@ -9587,8 +9984,23 @@
   }
 
   initializeSupabaseAuth().catch(() => {});
+  if (typeof globalScope.addEventListener === "function") {
+    globalScope.addEventListener("popstate", function onRoutePopstate() {
+      const nextRoute = parseAppRoute();
+      syncUiStateToRoute(nextRoute);
+      if (isAuthenticated()) {
+        refreshPlayerHub(
+          homeDirectoryStale ||
+            String(nextRoute?.name || "") === "home" ||
+            String(nextRoute?.name || "") === "hub",
+        );
+      }
+      renderMultiplayerUi();
+      renderState();
+    });
+  }
   renderMultiplayerUi();
-  refreshRoomDirectory(true);
+  refreshPlayerHub(true);
   if (multiplayerState.roomCode && multiplayerState.reconnectToken) {
     ensureMultiplayerConnection().then(() => {
       if (!multiplayerState.connected) {

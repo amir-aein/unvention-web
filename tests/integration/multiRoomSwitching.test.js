@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const http = require("node:http");
@@ -89,11 +91,13 @@ async function waitForServerReady(baseHttpUrl, timeoutMs) {
 
 function launchServer(port) {
   const projectRoot = path.resolve(__dirname, "../..");
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "unvention-multiroom-"));
   const child = spawn(process.execPath, ["server/index.js"], {
     cwd: projectRoot,
     env: {
       ...process.env,
       PORT: String(port),
+      SERVER_OUTPUT_DIR: outputDir,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

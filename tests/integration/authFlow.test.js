@@ -51,6 +51,10 @@ function createHarness(optionsInput) {
   const initialDisplayName = typeof options.initialDisplayName === 'string'
     ? options.initialDisplayName
     : 'Player';
+  const initialMultiplayerState =
+    options.initialMultiplayerState && typeof options.initialMultiplayerState === 'object'
+      ? options.initialMultiplayerState
+      : null;
   const locationOrigin = String(options.locationOrigin || 'http://127.0.0.1:8080');
   const locationUrl = new URL(String(options.locationHref || (locationOrigin + '/')));
   const authConfigUrl = String(options.authConfigUrl || 'https://project.supabase.co');
@@ -176,6 +180,12 @@ function createHarness(optionsInput) {
         refresh_token: 'stored-refresh-token',
         ...(initialSession || {}),
       }),
+    );
+  }
+  if (initialMultiplayerState) {
+    globalThis.localStorage.setItem(
+      'unvention.multiplayer.v1',
+      JSON.stringify(initialMultiplayerState),
     );
   }
 
@@ -370,6 +380,9 @@ function createHarness(optionsInput) {
       }, 200);
     }
     if (url.includes('/api/auth/profile/load')) {
+      if (Object.prototype.hasOwnProperty.call(options, 'profileLoadPayload')) {
+        return createJsonResponse(options.profileLoadPayload, 200);
+      }
       return createJsonResponse({
         ok: true,
         user: {
@@ -381,6 +394,12 @@ function createHarness(optionsInput) {
       }, 200);
     }
     if (url.includes('/api/auth/profile/update')) {
+      if (Object.prototype.hasOwnProperty.call(options, 'profileUpdatePayload')) {
+        return createJsonResponse(
+          options.profileUpdatePayload,
+          options.profileUpdateStatus || 200,
+        );
+      }
       try {
         const parsedBody = JSON.parse(String(options.body || '{}'));
         const patch = parsedBody?.patch && typeof parsedBody.patch === 'object'
@@ -407,7 +426,7 @@ function createHarness(optionsInput) {
       return createJsonResponse({ roomList: [] }, 200);
     }
     if (url.includes('/api/profile')) {
-      return createJsonResponse({ profile: null, activeRooms: [], recentRooms: [], serverTime: Date.now() }, 200);
+      return createJsonResponse({ profile: null, rooms: [], activeRooms: [], recentRooms: [], version: 0, serverTime: Date.now() }, 200);
     }
     return createJsonResponse({ ok: false, error: 'not_found' }, 404);
   };
@@ -776,6 +795,68 @@ test('callback verification failure shows specific auth stage error', async () =
     harness.fetchCalls.some((url) => url === 'http://127.0.0.1:8080/api/auth/verify-callback'),
   );
   assert.deepEqual(harness.historyReplacements, ['/']);
+
+  cleanupGlobals();
+});
+
+test('empty hub route redirects signed-in users back to home', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref: 'http://127.0.0.1:8080/hub',
+    initialSession: {
+      access_token: 'session-access',
+      refresh_token: 'session-refresh',
+      user: {
+        id: 'user-1',
+        email: 'player@example.com',
+        user_metadata: {},
+      },
+    },
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(10);
+
+  assert.ok(harness.historyReplacements.includes('/'));
+
+  cleanupGlobals();
+});
+
+test('signed-in room route keeps legacy profile token when auth profile load returns null', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref: 'http://127.0.0.1:8080/rooms/M3T4W5',
+    initialSession: {
+      access_token: 'session-access',
+      refresh_token: 'session-refresh',
+      user: {
+        id: 'user-1',
+        email: 'player@example.com',
+        user_metadata: {},
+      },
+    },
+    initialMultiplayerState: {
+      profileToken: 'legacy-room-token-1',
+      roomCode: 'M3T4W5',
+      url: 'ws://127.0.0.1:8080/ws',
+    },
+    profileLoadPayload: {
+      ok: true,
+      user: {
+        id: 'user-1',
+        email: 'player@example.com',
+        user_metadata: {},
+      },
+      profile: null,
+    },
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(16);
+
+  assert.ok(
+    harness.fetchCalls.some((url) => url.includes('/api/profile?profileToken=legacy-room-token-1')),
+  );
 
   cleanupGlobals();
 });
