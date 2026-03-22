@@ -50,10 +50,15 @@ The browser app reads public auth config from:
 `/api/auth/config` is enabled when server env includes:
 - `SUPABASE_URL`
 - `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`)
+- `APP_PUBLIC_ORIGIN` (recommended for local dev: `http://127.0.0.1:8080`)
 
 That endpoint returns:
 - `url` (Supabase project URL)
 - `publishableKey` (safe for client-side use)
+- `publicOrigin` (canonical browser origin used for auth redirects/callbacks)
+
+Local auth note:
+- Use `http://127.0.0.1:8080/` consistently for local sign-in flows instead of mixing `localhost` and `127.0.0.1`.
 
 ## Notes
 

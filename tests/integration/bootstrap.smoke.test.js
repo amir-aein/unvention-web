@@ -55,6 +55,12 @@ test('bootstrap wires round controls and reset action', () => {
       }
       return {
         style: {},
+        querySelectorAll() {
+          return [];
+        },
+        querySelector() {
+          return null;
+        },
         addEventListener(eventName, callback) {
           listeners[id + ':' + eventName] = callback;
         },

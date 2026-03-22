@@ -49,6 +49,7 @@
   const MULTIPLAYER_SESSION_KEY = "unvention.multiplayer.session.v1";
   const HOME_UI_STORAGE_KEY = "unvention.homeUi.v1";
   const AUTH_UI_STORAGE_KEY = "unvention.auth.ui.v1";
+  const AUTH_SESSION_STORAGE_KEY = "unvention.auth.session.v1";
   const ROOM_CITY_POOL = [
     { city: "London", flag: "🇬🇧" },
     { city: "Paris", flag: "🇫🇷" },
@@ -440,15 +441,18 @@
       enabled: false,
       loading: true,
       initializing: false,
+      callbackInFlight: false,
       statusMessage: "Checking authentication...",
       feedbackMessage: "",
       feedbackLevel: "info",
+      lastStage: "",
       email: "",
       session: null,
       user: null,
       profile: null,
       client: null,
       unsubscribe: null,
+      publicOrigin: "",
       profileSyncInFlight: false,
       displayNameModalOpen: false,
       displayNameModalSaving: false,
@@ -612,6 +616,94 @@
     }
   }
 
+  function loadPersistedAuthSession() {
+    const localStorageRef =
+      typeof globalScope.localStorage !== "undefined"
+        ? globalScope.localStorage
+        : null;
+    if (!localStorageRef) {
+      return null;
+    }
+    try {
+      const raw = localStorageRef.getItem(AUTH_SESSION_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      return normalizeStoredAuthSession(JSON.parse(raw));
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function persistAuthSession(sessionInput) {
+    const localStorageRef =
+      typeof globalScope.localStorage !== "undefined"
+        ? globalScope.localStorage
+        : null;
+    if (!localStorageRef) {
+      return;
+    }
+    const session = normalizeStoredAuthSession(sessionInput);
+    try {
+      if (!session) {
+        localStorageRef.removeItem(AUTH_SESSION_STORAGE_KEY);
+        return;
+      }
+      localStorageRef.setItem(
+        AUTH_SESSION_STORAGE_KEY,
+        JSON.stringify(session),
+      );
+    } catch (_error) {}
+  }
+
+  function clearPersistedAuthSession() {
+    persistAuthSession(null);
+  }
+
+  function normalizeStoredAuthSession(sessionInput) {
+    const session =
+      sessionInput && typeof sessionInput === "object" ? sessionInput : null;
+    if (!session) {
+      return null;
+    }
+    const accessToken = String(session.access_token || "").trim();
+    const refreshToken = String(session.refresh_token || "").trim();
+    if (!accessToken && !refreshToken) {
+      return null;
+    }
+    return {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: Number(session.expires_at || 0) || 0,
+      expires_in: Number(session.expires_in || 0) || 0,
+      token_type: String(session.token_type || "bearer"),
+      user:
+        session.user && typeof session.user === "object"
+          ? { ...session.user }
+          : null,
+    };
+  }
+
+  function getAuthAccessToken() {
+    return String(supabaseAuth.session?.access_token || "").trim();
+  }
+
+  function getAuthRefreshToken() {
+    return String(supabaseAuth.session?.refresh_token || "").trim();
+  }
+
+  function isStoredSessionExpired(sessionInput) {
+    const session = normalizeStoredAuthSession(sessionInput);
+    if (!session) {
+      return true;
+    }
+    const expiresAtSeconds = Number(session.expires_at || 0);
+    if (!expiresAtSeconds) {
+      return false;
+    }
+    return Date.now() >= Math.max(0, expiresAtSeconds - 30) * 1000;
+  }
+
   function closeDisplayNameModal() {
     supabaseAuth.displayNameModalOpen = false;
     supabaseAuth.displayNameModalSaving = false;
@@ -673,6 +765,10 @@
     renderMultiplayerUi();
   }
 
+  function setAuthStage(stageInput) {
+    supabaseAuth.lastStage = String(stageInput || "");
+  }
+
   function sanitizeAuthEmail(emailInput) {
     return String(emailInput || "")
       .trim()
@@ -680,27 +776,18 @@
   }
 
   async function initializeSupabaseAuth() {
-    if (supabaseAuth.initializing || supabaseAuth.client) {
+    if (supabaseAuth.initializing) {
       return;
     }
     supabaseAuth.initializing = true;
     supabaseAuth.loading = true;
     supabaseAuth.statusMessage = "Loading auth...";
     renderMultiplayerUi();
-
     const createClient =
       globalScope?.supabase &&
       typeof globalScope.supabase.createClient === "function"
         ? globalScope.supabase.createClient
         : null;
-    if (!createClient) {
-      supabaseAuth.enabled = false;
-      supabaseAuth.loading = false;
-      supabaseAuth.initializing = false;
-      supabaseAuth.statusMessage = "Auth unavailable";
-      renderMultiplayerUi();
-      return;
-    }
 
     const configResult = await fetchFirstJsonFromCandidates(
       buildApiCandidates(multiplayerState.url, "/api/auth/config"),
@@ -709,40 +796,49 @@
     const configEnabled = Boolean(
       config?.enabled && config?.url && config?.publishableKey,
     );
-    if (!configEnabled || !createClient) {
+    supabaseAuth.publicOrigin = String(config?.publicOrigin || "").trim();
+    if (!configEnabled) {
       supabaseAuth.enabled = false;
       supabaseAuth.loading = false;
       supabaseAuth.initializing = false;
-      supabaseAuth.statusMessage = configEnabled
-        ? "Supabase client unavailable"
-        : "Auth unavailable";
+      supabaseAuth.statusMessage = "Auth unavailable";
       renderMultiplayerUi();
+      return;
+    }
+    if (normalizeLocalOrigin(supabaseAuth.publicOrigin)) {
       return;
     }
 
     try {
-      supabaseAuth.client = createClient(
-        String(config.url),
-        String(config.publishableKey),
-        {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: true,
-          },
-        },
-      );
       supabaseAuth.enabled = true;
-      const authSubscription = supabaseAuth.client.auth.onAuthStateChange(
-        (_event, session) => {
-          applyAuthSession(session).catch(() => {});
-        },
-      );
-      const unsubscribe = authSubscription?.data?.subscription?.unsubscribe;
-      supabaseAuth.unsubscribe =
-        typeof unsubscribe === "function" ? unsubscribe : null;
-      const sessionResult = await supabaseAuth.client.auth.getSession();
-      await applyAuthSession(sessionResult?.data?.session || null);
+      if (createClient) {
+        supabaseAuth.client = createClient(
+          String(config.url),
+          String(config.publishableKey),
+          {
+            auth: {
+              persistSession: false,
+              autoRefreshToken: false,
+              detectSessionInUrl: false,
+            },
+          },
+        );
+      }
+      let session = await resolveAuthCallback();
+      if (!session) {
+        session = loadPersistedAuthSession();
+      }
+      if (session && isStoredSessionExpired(session)) {
+        session = await refreshStoredAuthSession(session);
+      }
+      if (session) {
+        session = await ensureSessionUser(session);
+        persistAuthSession(session);
+      } else {
+        clearPersistedAuthSession();
+      }
+      setAuthStage("session_load");
+      await applyAuthSession(session || null);
     } catch (error) {
       supabaseAuth.enabled = false;
       supabaseAuth.statusMessage = "Auth initialization failed";
@@ -759,11 +855,12 @@
   }
 
   async function applyAuthSession(sessionInput) {
-    const session = sessionInput || null;
+    const session = normalizeStoredAuthSession(sessionInput) || null;
     supabaseAuth.session = session;
     supabaseAuth.user = session?.user || null;
     supabaseAuth.profile = null;
     if (session?.user) {
+      persistAuthSession(session);
       supabaseAuth.statusMessage =
         "Logged in as " + String(session.user.email || "user");
       if (!supabaseAuth.email && session.user.email) {
@@ -775,9 +872,13 @@
       queueAuthProfileSync("session");
       await refreshPlayerHub(true);
     } else {
-      supabaseAuth.statusMessage = supabaseAuth.enabled
-        ? "Not signed in"
-        : "Auth unavailable";
+      clearPersistedAuthSession();
+      supabaseAuth.statusMessage =
+        supabaseAuth.enabled && !supabaseAuth.callbackInFlight
+          ? "Not signed in"
+          : supabaseAuth.enabled
+            ? "Completing sign-in..."
+            : "Auth unavailable";
       closeDisplayNameModal();
       supabaseAuth.displayNameDraft = "";
       roomDirectoryRows = [];
@@ -789,22 +890,43 @@
   }
 
   async function refreshAuthProfile() {
-    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+    if (!supabaseAuth.user?.id || !getAuthAccessToken()) {
       return;
     }
-    const { data, error } = await supabaseAuth.client
-      .from("app_users")
-      .select("user_id,email,display_name,legacy_profile_token,last_seen_at")
-      .eq("user_id", String(supabaseAuth.user.id))
-      .maybeSingle();
-    if (error) {
+    setAuthStage("profile_fetch");
+    const response = await fetch(buildAuthApiUrl("/api/auth/profile/load"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        accessToken: getAuthAccessToken(),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) {
       setAuthFeedback(
-        "Could not load profile: " + String(error.message || "unknown_error"),
+        "Could not load profile: " +
+          String(
+            payload?.message ||
+              payload?.error ||
+              ("Request failed (" + String(response.status) + ")"),
+          ),
         "error",
       );
       return;
     }
-    supabaseAuth.profile = data || null;
+    if (payload?.user && typeof payload.user === "object") {
+      supabaseAuth.user = payload.user;
+      supabaseAuth.session = {
+        ...(supabaseAuth.session && typeof supabaseAuth.session === "object"
+          ? supabaseAuth.session
+          : {}),
+        user: payload.user,
+      };
+      persistAuthSession(supabaseAuth.session);
+    }
+    supabaseAuth.profile = payload?.profile || null;
     const profileName = getAssignedDisplayName();
     const profileLegacyToken = getAuthProfileLegacyToken();
     multiplayerState.name = profileName || "";
@@ -814,7 +936,7 @@
   }
 
   function queueAuthProfileSync(reasonInput) {
-    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+    if (!supabaseAuth.user?.id || !getAuthAccessToken()) {
       return;
     }
     if (authProfileSyncTimer) {
@@ -828,8 +950,8 @@
 
   async function syncAuthProfile(reasonInput) {
     if (
-      !supabaseAuth.client ||
       !supabaseAuth.user?.id ||
+      !getAuthAccessToken() ||
       supabaseAuth.profileSyncInFlight
     ) {
       return;
@@ -843,34 +965,52 @@
       if (legacyProfileToken) {
         patch.legacy_profile_token = legacyProfileToken;
       }
-      let { error } = await supabaseAuth.client
-        .from("app_users")
-        .update(patch)
-        .eq("user_id", String(supabaseAuth.user.id));
-      if (
-        error &&
-        String(error.code || "") === "23505" &&
-        /legacy_profile_token/i.test(String(error.message || ""))
-      ) {
+      let response = await fetch(buildAuthApiUrl("/api/auth/profile/update"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          accessToken: getAuthAccessToken(),
+          patch,
+        }),
+      });
+      let payload = await response.json().catch(() => ({}));
+      let duplicateLegacyToken =
+        (!response.ok || !payload?.ok) &&
+        String(payload?.code || "") === "23505" &&
+        /legacy_profile_token/i.test(String(payload?.message || ""));
+      if (duplicateLegacyToken) {
         delete patch.legacy_profile_token;
         multiplayerState.profileToken = "";
         persistMultiplayerState();
-        const retry = await supabaseAuth.client
-          .from("app_users")
-          .update(patch)
-          .eq("user_id", String(supabaseAuth.user.id));
-        error = retry.error || null;
+        response = await fetch(buildAuthApiUrl("/api/auth/profile/update"), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            accessToken: getAuthAccessToken(),
+            patch,
+          }),
+        });
+        payload = await response.json().catch(() => ({}));
       }
-      if (error) {
+      if (!response.ok || !payload?.ok) {
         setAuthFeedback(
           "Profile sync failed (" +
             String(reasonInput || "update") +
             "): " +
-            String(error.message || "unknown_error"),
+            String(
+              payload?.message ||
+                payload?.error ||
+                ("Request failed (" + String(response.status) + ")"),
+            ),
           "error",
         );
         return;
       }
+      supabaseAuth.profile = payload?.profile || supabaseAuth.profile;
       await refreshAuthProfile();
     } finally {
       supabaseAuth.profileSyncInFlight = false;
@@ -879,7 +1019,7 @@
   }
 
   async function saveAuthDisplayName(nameInput) {
-    if (!supabaseAuth.client || !supabaseAuth.user?.id) {
+    if (!supabaseAuth.user?.id || !getAuthAccessToken()) {
       return false;
     }
     const nextDisplayName = sanitizeDisplayName(nameInput);
@@ -900,44 +1040,64 @@
     if (legacyProfileToken) {
       patch.legacy_profile_token = legacyProfileToken;
     }
-    let { error } = await supabaseAuth.client
-      .from("app_users")
-      .update(patch)
-      .eq("user_id", String(supabaseAuth.user.id));
+    let response = await fetch(buildAuthApiUrl("/api/auth/profile/update"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        accessToken: getAuthAccessToken(),
+        patch,
+      }),
+    });
+    let payload = await response.json().catch(() => ({}));
     if (
-      error &&
-      String(error.code || "") === "23505" &&
-      /legacy_profile_token/i.test(String(error.message || ""))
+      (!response.ok || !payload?.ok) &&
+      String(payload?.code || "") === "23505" &&
+      /legacy_profile_token/i.test(String(payload?.message || ""))
     ) {
       delete patch.legacy_profile_token;
       multiplayerState.profileToken = "";
       persistMultiplayerState();
-      const retry = await supabaseAuth.client
-        .from("app_users")
-        .update(patch)
-        .eq("user_id", String(supabaseAuth.user.id));
-      error = retry.error || null;
+      response = await fetch(buildAuthApiUrl("/api/auth/profile/update"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          accessToken: getAuthAccessToken(),
+          patch,
+        }),
+      });
+      payload = await response.json().catch(() => ({}));
     }
-    if (error) {
+    if (!response.ok || !payload?.ok) {
       supabaseAuth.displayNameModalSaving = false;
       supabaseAuth.displayNameModalFeedback =
-        "Could not save name: " + String(error.message || "unknown_error");
+        "Could not save name: " +
+        String(
+          payload?.message ||
+            payload?.error ||
+            ("Request failed (" + String(response.status) + ")"),
+        );
       supabaseAuth.displayNameModalFeedbackLevel = "error";
       renderMultiplayerUi();
       return false;
     }
-    supabaseAuth.profile = {
-      ...(supabaseAuth.profile && typeof supabaseAuth.profile === "object"
-        ? supabaseAuth.profile
-        : {}),
-      user_id: String(supabaseAuth.user.id),
-      email: String(
-        supabaseAuth.user.email || supabaseAuth.profile?.email || "",
-      ),
-      display_name: nextDisplayName,
-      legacy_profile_token: legacyProfileToken || null,
-      last_seen_at: patch.last_seen_at,
-    };
+    supabaseAuth.profile =
+      payload?.profile ||
+      {
+        ...(supabaseAuth.profile && typeof supabaseAuth.profile === "object"
+          ? supabaseAuth.profile
+          : {}),
+        user_id: String(supabaseAuth.user.id),
+        email: String(
+          supabaseAuth.user.email || supabaseAuth.profile?.email || "",
+        ),
+        display_name: nextDisplayName,
+        legacy_profile_token: legacyProfileToken || null,
+        last_seen_at: patch.last_seen_at,
+      };
     multiplayerState.name = nextDisplayName;
     persistMultiplayerState();
     closeDisplayNameModal();
@@ -971,28 +1131,39 @@
 
   async function sendAuthMagicLink() {
     const email = sanitizeAuthEmail(supabaseAuth.email);
-    if (!email || !supabaseAuth.client || !supabaseAuth.enabled) {
+    if (!email || !supabaseAuth.enabled) {
       return;
     }
     supabaseAuth.loading = true;
     renderMultiplayerUi();
-    const emailRedirectTo =
-      typeof globalScope.location !== "undefined"
-        ? String(globalScope.location.origin || "").replace(/\/$/, "") + "/"
-        : undefined;
-    const { error } = await supabaseAuth.client.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: true,
-        emailRedirectTo,
-      },
-    });
+    const emailRedirectTo = getCanonicalAuthOrigin() + "/";
+    let errorMessage = "";
+    try {
+      setAuthStage("magic_link_request");
+      const response = await fetch(buildAuthApiUrl("/api/auth/magic-link"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          redirectTo: emailRedirectTo,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.ok) {
+        errorMessage = String(
+          payload?.message ||
+            payload?.error ||
+            ("Request failed (" + String(response.status) + ")"),
+        );
+      }
+    } catch (error) {
+      errorMessage = String(error?.message || "Could not send link");
+    }
     supabaseAuth.loading = false;
-    if (error) {
-      setAuthFeedback(
-        "Could not send link: " + String(error.message || "unknown_error"),
-        "error",
-      );
+    if (errorMessage) {
+      setAuthFeedback("Could not send link: " + errorMessage, "error");
       return;
     }
     persistAuthUiState();
@@ -1003,16 +1174,41 @@
   }
 
   async function logoutAuth() {
-    if (!supabaseAuth.client || !supabaseAuth.enabled) {
+    if (!supabaseAuth.enabled) {
       return;
     }
     supabaseAuth.loading = true;
+    setAuthStage("sign_out");
     renderMultiplayerUi();
-    const { error } = await supabaseAuth.client.auth.signOut();
+    const accessToken = getAuthAccessToken();
+    let logoutError = null;
+    if (accessToken) {
+      try {
+        const response = await fetch(buildAuthApiUrl("/api/auth/logout"), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            accessToken,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok) {
+          logoutError = new Error(
+            payload?.message ||
+              payload?.error ||
+              ("Request failed (" + String(response.status) + ")"),
+          );
+        }
+      } catch (error) {
+        logoutError = error;
+      }
+    }
     supabaseAuth.loading = false;
-    if (error) {
+    if (logoutError) {
       setAuthFeedback(
-        "Could not log out: " + String(error.message || "unknown_error"),
+        "Could not log out: " + String(logoutError.message || "unknown_error"),
         "error",
       );
       return;
@@ -1034,6 +1230,7 @@
     hubProfileError = "";
     roomDirectoryError = "";
     homeStep = "mode";
+    clearPersistedAuthSession();
     persistAuthUiState();
     setAuthFeedback("Signed out", "info");
     renderMultiplayerUi();
@@ -1438,12 +1635,12 @@
 
   function inferLocalNodeMultiplayerUrl() {
     if (typeof globalScope.location === "undefined") {
-      return "ws://localhost:8080";
+      return "ws://127.0.0.1:8080";
     }
     const protocol = String(globalScope.location.protocol || "").toLowerCase();
     const hostname = String(globalScope.location.hostname || "").trim();
     const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
-    const host = formatHostnameWithPort(hostname || "localhost", "8080");
+    const host = formatHostnameWithPort(hostname || "127.0.0.1", "8080");
     return wsProtocol + "//" + host;
   }
 
@@ -1463,7 +1660,7 @@
         return wsProtocol + "//" + host;
       }
     }
-    return "ws://localhost:8080";
+    return "ws://127.0.0.1:8080";
   }
 
   function shouldNormalizeLocalDevMultiplayerUrl(currentUrlInput) {
@@ -1843,7 +2040,7 @@
     }
 
     try {
-      let raw = String(inputUrl || "").trim() || "ws://localhost:8080";
+      let raw = String(inputUrl || "").trim() || "ws://127.0.0.1:8080";
       if (shouldNormalizeLocalDevMultiplayerUrl(raw)) {
         raw = inferLocalNodeMultiplayerUrl();
       }
@@ -1862,8 +2059,314 @@
       pushUnique(origin + path);
     } catch (_error) {}
 
-    pushUnique("http://localhost:8080" + path);
+    pushUnique("http://127.0.0.1:8080" + path);
     return candidates;
+  }
+
+  function buildAuthApiUrl(pathInput) {
+    return getCanonicalAuthOrigin() + normalizeApiPath(pathInput);
+  }
+
+  function getCanonicalAuthOrigin() {
+    const configuredOrigin = String(supabaseAuth.publicOrigin || "").trim();
+    if (configuredOrigin) {
+      return configuredOrigin.replace(/\/$/, "");
+    }
+    if (typeof globalScope.location !== "undefined") {
+      return String(globalScope.location.origin || "")
+        .trim()
+        .replace(/\/$/, "");
+    }
+    return "http://127.0.0.1:8080";
+  }
+
+  function normalizeApiPath(pathInput) {
+    const path = String(pathInput || "").trim();
+    if (!path) {
+      return "/";
+    }
+    return path.startsWith("/") ? path : "/" + path;
+  }
+
+  function normalizeLocalOrigin(publicOriginInput) {
+    if (typeof globalScope.location === "undefined") {
+      return false;
+    }
+    const currentOrigin = String(globalScope.location.origin || "").trim();
+    const targetOrigin = String(publicOriginInput || "").trim();
+    if (!currentOrigin || !targetOrigin || currentOrigin === targetOrigin) {
+      return false;
+    }
+    try {
+      const currentUrl = new URL(
+        String(globalScope.location.href || currentOrigin),
+      );
+      const targetUrl = new URL(targetOrigin);
+      if (
+        !isLocalHostname(currentUrl.hostname) ||
+        !isLocalHostname(targetUrl.hostname)
+      ) {
+        return false;
+      }
+      setAuthStage("origin_mismatch");
+      const nextUrl =
+        targetUrl.origin +
+        String(currentUrl.pathname || "/") +
+        String(currentUrl.search || "") +
+        String(currentUrl.hash || "");
+      if (typeof globalScope.location.replace === "function") {
+        globalScope.location.replace(nextUrl);
+      } else {
+        globalScope.location.href = nextUrl;
+      }
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async function resolveAuthCallback() {
+    if (typeof globalScope.location === "undefined") {
+      return null;
+    }
+    const callback = parseAuthCallbackUrl(globalScope.location);
+    if (!callback.hasAuthParams) {
+      return null;
+    }
+    supabaseAuth.callbackInFlight = true;
+    supabaseAuth.statusMessage = "Completing sign-in...";
+    renderMultiplayerUi();
+    try {
+      if (callback.accessToken && callback.refreshToken) {
+        setAuthStage("session_set");
+        const session = normalizeStoredAuthSession({
+          access_token: callback.accessToken,
+          refresh_token: callback.refreshToken,
+        });
+        if (!session) {
+          throw buildAuthStageError(
+            "session_set_failed",
+            "Could not persist auth session.",
+          );
+        }
+        clearAuthCallbackUrl();
+        persistAuthSession(session);
+        return ensureSessionUser(session);
+      }
+      if (callback.code) {
+        setAuthStage("callback_exchange");
+        if (
+          !supabaseAuth.client ||
+          !supabaseAuth.client.auth ||
+          typeof supabaseAuth.client.auth.exchangeCodeForSession !== "function"
+        ) {
+          throw buildAuthStageError(
+            "callback_exchange_failed",
+            "Supabase client does not support code exchange.",
+          );
+        }
+        const result = await supabaseAuth.client.auth.exchangeCodeForSession(
+          callback.code,
+        );
+        if (result?.error) {
+          throw buildAuthStageError(
+            "callback_exchange_failed",
+            result.error.message || "Could not exchange auth code.",
+          );
+        }
+        clearAuthCallbackUrl();
+        const session = normalizeStoredAuthSession(result?.data?.session || null);
+        persistAuthSession(session);
+        return ensureSessionUser(session);
+      }
+      if (callback.tokenHash && callback.type) {
+        setAuthStage("callback_exchange");
+        const response = await fetch(buildAuthApiUrl("/api/auth/verify-callback"), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            tokenHash: callback.tokenHash,
+            type: callback.type,
+            redirectTo: getCanonicalAuthOrigin(),
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok) {
+          throw buildAuthStageError(
+            String(payload?.stage || "callback_exchange_failed"),
+            payload?.message ||
+              payload?.error ||
+              ("Request failed (" + String(response.status) + ")"),
+          );
+        }
+        const session = normalizeStoredAuthSession(payload?.session || null);
+        if (!session?.access_token || !session?.refresh_token) {
+          throw buildAuthStageError(
+            "session_set_failed",
+            "Supabase callback verification did not return a complete session.",
+          );
+        }
+        setAuthStage("session_set");
+        clearAuthCallbackUrl();
+        persistAuthSession(session);
+        return ensureSessionUser(session);
+      }
+    } catch (error) {
+      const stage = String(error?.stage || "callback_exchange_failed");
+      setAuthStage(stage);
+      supabaseAuth.statusMessage = "Auth callback failed";
+      setAuthFeedback(
+        "Auth callback failed (" +
+          stage +
+          "): " +
+          String(error?.message || "unknown_error"),
+        "error",
+      );
+      clearAuthCallbackUrl();
+    } finally {
+      supabaseAuth.callbackInFlight = false;
+      renderMultiplayerUi();
+    }
+    return null;
+  }
+
+  async function ensureSessionUser(sessionInput) {
+    const session = normalizeStoredAuthSession(sessionInput);
+    if (!session?.access_token) {
+      return session;
+    }
+    if (session.user?.id) {
+      return session;
+    }
+    const response = await fetch(buildAuthApiUrl("/api/auth/session/user"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        accessToken: session.access_token,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok || !payload?.user) {
+      throw buildAuthStageError(
+        "session_set_failed",
+        payload?.message ||
+          payload?.error ||
+          ("Request failed (" + String(response.status) + ")"),
+      );
+    }
+    const nextSession = {
+      ...session,
+      user: payload.user,
+    };
+    return nextSession;
+  }
+
+  async function refreshStoredAuthSession(sessionInput) {
+    const session = normalizeStoredAuthSession(sessionInput);
+    const refreshToken = String(session?.refresh_token || "").trim();
+    if (!refreshToken) {
+      clearPersistedAuthSession();
+      return null;
+    }
+    setAuthStage("refresh_failed");
+    const response = await fetch(buildAuthApiUrl("/api/auth/session/refresh"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        refreshToken,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok || !payload?.session) {
+      clearPersistedAuthSession();
+      setAuthFeedback(
+        "Could not refresh session: " +
+          String(
+            payload?.message ||
+              payload?.error ||
+              ("Request failed (" + String(response.status) + ")"),
+          ),
+        "error",
+      );
+      return null;
+    }
+    const nextSession = normalizeStoredAuthSession(payload.session);
+    persistAuthSession(nextSession);
+    return nextSession;
+  }
+
+  function parseAuthCallbackUrl(locationInput) {
+    const locationRef = locationInput || {};
+    const searchParams = safeUrlSearchParams(String(locationRef.search || ""));
+    const hashParams = safeUrlSearchParams(
+      String(locationRef.hash || "").replace(/^#/, "?"),
+    );
+    const accessToken = String(
+      hashParams.get("access_token") ||
+        searchParams.get("access_token") ||
+        "",
+    ).trim();
+    const refreshToken = String(
+      hashParams.get("refresh_token") ||
+        searchParams.get("refresh_token") ||
+        "",
+    ).trim();
+    const code = String(searchParams.get("code") || "").trim();
+    const tokenHash = String(
+      searchParams.get("token_hash") || hashParams.get("token_hash") || "",
+    ).trim();
+    const type = String(
+      searchParams.get("type") || hashParams.get("type") || "",
+    ).trim();
+    const hasError =
+      Boolean(searchParams.get("error")) || Boolean(hashParams.get("error"));
+    return {
+      accessToken,
+      refreshToken,
+      code,
+      tokenHash,
+      type,
+      hasAuthParams:
+        Boolean(accessToken && refreshToken) ||
+        Boolean(code) ||
+        Boolean(tokenHash && type) ||
+        hasError,
+    };
+  }
+
+  function safeUrlSearchParams(searchInput) {
+    try {
+      return new URLSearchParams(String(searchInput || ""));
+    } catch (_error) {
+      return new URLSearchParams();
+    }
+  }
+
+  function clearAuthCallbackUrl() {
+    if (
+      typeof globalScope.history === "undefined" ||
+      typeof globalScope.history.replaceState !== "function" ||
+      typeof globalScope.location === "undefined"
+    ) {
+      return;
+    }
+    globalScope.history.replaceState(
+      null,
+      "",
+      String(globalScope.location.pathname || "/"),
+    );
+  }
+
+  function buildAuthStageError(stageInput, messageInput) {
+    const error = new Error(String(messageInput || "unknown_error"));
+    error.stage = String(stageInput || "auth_error");
+    return error;
   }
 
   function buildRoomDirectoryCandidates(inputUrl) {

@@ -51,8 +51,15 @@ function createHarness(optionsInput) {
   const initialDisplayName = typeof options.initialDisplayName === 'string'
     ? options.initialDisplayName
     : 'Player';
+  const locationOrigin = String(options.locationOrigin || 'http://127.0.0.1:8080');
+  const locationUrl = new URL(String(options.locationHref || (locationOrigin + '/')));
+  const authConfigUrl = String(options.authConfigUrl || 'https://project.supabase.co');
+  const authConfigPublicOrigin = String(options.authConfigPublicOrigin || 'http://127.0.0.1:8080');
   const listeners = {};
   const nodes = new Map();
+  const historyReplacements = [];
+  const fetchCalls = [];
+  let redirectedTo = '';
 
   class MockHTMLElement {}
   globalThis.HTMLElement = MockHTMLElement;
@@ -134,22 +141,51 @@ function createHarness(optionsInput) {
   };
 
   globalThis.location = {
-    origin: 'http://localhost:8080',
-    protocol: 'http:',
-    host: 'localhost:8080',
-    hostname: 'localhost',
-    port: '8080',
+    href: locationUrl.href,
+    origin: locationUrl.origin,
+    protocol: locationUrl.protocol,
+    host: locationUrl.host,
+    hostname: locationUrl.hostname,
+    port: locationUrl.port,
+    pathname: locationUrl.pathname,
+    search: locationUrl.search,
+    hash: locationUrl.hash,
+    replace(nextUrl) {
+      redirectedTo = String(nextUrl || '');
+    },
+  };
+  globalThis.history = {
+    replaceState(_state, _title, nextUrl) {
+      historyReplacements.push(String(nextUrl || ''));
+      const parsed = new URL(String(nextUrl || '/'), globalThis.location.origin);
+      globalThis.location.href = parsed.href;
+      globalThis.location.pathname = parsed.pathname;
+      globalThis.location.search = parsed.search;
+      globalThis.location.hash = parsed.hash;
+    },
   };
 
   globalThis.localStorage = createStorage();
   globalThis.sessionStorage = createStorage();
   globalThis.confirm = () => true;
+  if (initialSession) {
+    globalThis.localStorage.setItem(
+      'unvention.auth.session.v1',
+      JSON.stringify({
+        access_token: 'stored-access-token',
+        refresh_token: 'stored-refresh-token',
+        ...(initialSession || {}),
+      }),
+    );
+  }
 
   const authState = {
     session: initialSession,
     onChange: null,
     signInCalls: [],
     signOutCalls: 0,
+    setSessionCalls: [],
+    exchangeCodeCalls: [],
   };
 
   const profileRow = {
@@ -179,6 +215,42 @@ function createHarness(optionsInput) {
           data: {
             session: authState.session,
           },
+        };
+      },
+      async setSession(payload) {
+        authState.setSessionCalls.push(payload);
+        authState.session = options.setSessionResult || {
+          access_token: String(payload?.access_token || ''),
+          refresh_token: String(payload?.refresh_token || ''),
+          user: {
+            id: 'user-1',
+            email: 'player@example.com',
+            user_metadata: {},
+          },
+        };
+        return {
+          data: {
+            session: authState.session,
+          },
+          error: options.setSessionError || null,
+        };
+      },
+      async exchangeCodeForSession(code) {
+        authState.exchangeCodeCalls.push(code);
+        authState.session = options.exchangeCodeSession || {
+          access_token: 'code-access-token',
+          refresh_token: 'code-refresh-token',
+          user: {
+            id: 'user-1',
+            email: 'player@example.com',
+            user_metadata: {},
+          },
+        };
+        return {
+          data: {
+            session: authState.session,
+          },
+          error: options.exchangeCodeError || null,
         };
       },
       async signInWithOtp(payload) {
@@ -236,16 +308,100 @@ function createHarness(optionsInput) {
     },
   };
 
-  globalThis.fetch = async function fetchStub(urlInput) {
+  globalThis.fetch = async function fetchStub(urlInput, optionsInput) {
     const url = String(urlInput || '');
+    const options = optionsInput && typeof optionsInput === 'object' ? optionsInput : {};
+    fetchCalls.push(url);
     if (url.includes('/api/auth/config')) {
       return createJsonResponse({
         ok: true,
         enabled: true,
-        url: 'https://project.supabase.co',
+        url: authConfigUrl,
         publishableKey: 'sb_publishable_test_key',
+        publicOrigin: authConfigPublicOrigin,
         serverTime: Date.now(),
       }, 200);
+    }
+    if (url.includes('/api/auth/magic-link')) {
+      return createJsonResponse({ ok: true, sent: true }, 200);
+    }
+    if (url.includes('/api/auth/session/user')) {
+      return createJsonResponse({
+        ok: true,
+        user: {
+          id: 'user-1',
+          email: 'player@example.com',
+          user_metadata: {},
+        },
+      }, 200);
+    }
+    if (url.includes('/api/auth/session/refresh')) {
+      return createJsonResponse({
+        ok: true,
+        session: {
+          access_token: 'refreshed-access-token',
+          refresh_token: 'refreshed-refresh-token',
+          user: {
+            id: 'user-1',
+            email: 'player@example.com',
+            user_metadata: {},
+          },
+        },
+      }, 200);
+    }
+    if (url.includes('/api/auth/verify-callback')) {
+      if (options.verifyCallbackStatus && options.verifyCallbackStatus >= 400) {
+        return createJsonResponse({
+          ok: false,
+          stage: 'callback_exchange_failed',
+          message: options.verifyCallbackMessage || 'verify failed',
+        }, options.verifyCallbackStatus);
+      }
+      return createJsonResponse(options.verifyCallbackPayload || {
+        ok: true,
+        session: {
+          access_token: 'verified-access-token',
+          refresh_token: 'verified-refresh-token',
+          user: {
+            id: 'user-1',
+            email: 'player@example.com',
+          },
+        },
+      }, 200);
+    }
+    if (url.includes('/api/auth/profile/load')) {
+      return createJsonResponse({
+        ok: true,
+        user: {
+          id: profileRow.user_id,
+          email: profileRow.email,
+          user_metadata: {},
+        },
+        profile: { ...profileRow },
+      }, 200);
+    }
+    if (url.includes('/api/auth/profile/update')) {
+      try {
+        const parsedBody = JSON.parse(String(options.body || '{}'));
+        const patch = parsedBody?.patch && typeof parsedBody.patch === 'object'
+          ? parsedBody.patch
+          : {};
+        Object.assign(profileRow, patch);
+      } catch (_error) {}
+      return createJsonResponse({
+        ok: true,
+        user: {
+          id: profileRow.user_id,
+          email: profileRow.email,
+          user_metadata: {},
+        },
+        profile: { ...profileRow },
+      }, 200);
+    }
+    if (url.includes('/api/auth/logout')) {
+      authState.signOutCalls += 1;
+      authState.session = null;
+      return createJsonResponse({ ok: true, loggedOut: true }, 200);
     }
     if (url.includes('/api/rooms')) {
       return createJsonResponse({ roomList: [] }, 200);
@@ -389,6 +545,11 @@ function createHarness(optionsInput) {
     getNode,
     authState,
     profileRow,
+    historyReplacements,
+    fetchCalls,
+    getRedirectedTo() {
+      return redirectedTo;
+    },
   };
 }
 
@@ -403,6 +564,7 @@ function cleanupGlobals() {
   delete globalThis.Unvention;
   delete globalThis.document;
   delete globalThis.location;
+  delete globalThis.history;
   delete globalThis.fetch;
   delete globalThis.supabase;
   delete globalThis.localStorage;
@@ -415,7 +577,7 @@ test('auth gate is visible when there is no active session', async () => {
   resetBootstrapModules();
   const harness = createHarness({ initialSession: null });
   require('../../src/app/bootstrap.js');
-  await flushAsyncWork(8);
+  await flushAsyncWork(16);
 
   assert.equal(harness.getNode('auth-gate-screen').style.display, 'flex');
   assert.equal(harness.getNode('new-game-screen').style.display, 'none');
@@ -438,7 +600,7 @@ test('signed-in session unlocks home screen and logout returns to auth gate', as
   });
 
   require('../../src/app/bootstrap.js');
-  await flushAsyncWork(8);
+  await flushAsyncWork(16);
 
   assert.equal(harness.getNode('auth-gate-screen').style.display, 'none');
   assert.equal(harness.getNode('new-game-screen').style.display, 'flex');
@@ -488,6 +650,132 @@ test('signed-in user without display name is prompted to set one before continui
   assert.equal(harness.profileRow.display_name, 'Alex');
   assert.equal(harness.getNode('auth-display-name-modal').style.display, 'none');
   assert.match(String(harness.getNode('auth-home-display-name-line').textContent || ''), /Display name: Alex/);
+
+  cleanupGlobals();
+});
+
+test('local auth redirects localhost to canonical 127.0.0.1 origin before auth init', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationOrigin: 'http://localhost:8080',
+    locationHref: 'http://localhost:8080/?room=test#access_token=token-1&refresh_token=token-2',
+    authConfigPublicOrigin: 'http://127.0.0.1:8080',
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(4);
+
+  assert.equal(
+    harness.getRedirectedTo(),
+    'http://127.0.0.1:8080/?room=test#access_token=token-1&refresh_token=token-2',
+  );
+  assert.equal(harness.authState.setSessionCalls.length, 0);
+
+  cleanupGlobals();
+});
+
+test('magic link request uses canonical auth origin for redirect and server endpoint', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({ initialSession: null });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  harness.getNode('auth-login-email-input').value = 'player@example.com';
+  const inputListener = harness.listeners['auth-login-email-input:input'];
+  assert.equal(typeof inputListener, 'function');
+  inputListener();
+
+  const sendListener = harness.listeners['auth-send-link:click'];
+  assert.equal(typeof sendListener, 'function');
+  await sendListener();
+  await flushAsyncWork(6);
+
+  assert.ok(
+    harness.fetchCalls.some((url) => url === 'http://127.0.0.1:8080/api/auth/magic-link'),
+  );
+  assert.match(
+    String(harness.getNode('auth-login-feedback-line').textContent || ''),
+    /Magic link sent/,
+  );
+
+  cleanupGlobals();
+});
+
+test('callback hash tokens create a session and clear callback url', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref:
+      'http://127.0.0.1:8080/#access_token=hash-access&refresh_token=hash-refresh',
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  assert.equal(harness.authState.setSessionCalls.length, 0);
+  assert.ok(
+    harness.fetchCalls.some((url) => url === 'http://127.0.0.1:8080/api/auth/session/user'),
+  );
+  assert.deepEqual(harness.historyReplacements, ['/']);
+  assert.equal(harness.getNode('auth-gate-screen').style.display, 'none');
+
+  cleanupGlobals();
+});
+
+test('callback code exchanges before rendering signed-out state', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref: 'http://127.0.0.1:8080/?code=pkce-code',
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  assert.deepEqual(harness.authState.exchangeCodeCalls, ['pkce-code']);
+  assert.equal(harness.getNode('auth-gate-screen').style.display, 'none');
+  assert.match(
+    String(harness.getNode('auth-home-status-line').textContent || ''),
+    /Logged in as player@example\.com/,
+  );
+
+  cleanupGlobals();
+});
+
+test('token_hash callback uses local verify endpoint and persists returned session', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref:
+      'http://127.0.0.1:8080/?token_hash=thash-1&type=magiclink',
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  assert.ok(
+    harness.fetchCalls.some((url) => url === 'http://127.0.0.1:8080/api/auth/verify-callback'),
+  );
+  assert.equal(harness.authState.setSessionCalls.length, 0);
+  assert.equal(harness.getNode('auth-gate-screen').style.display, 'none');
+
+  cleanupGlobals();
+});
+
+test('callback verification failure shows specific auth stage error', async () => {
+  resetBootstrapModules();
+  const harness = createHarness({
+    locationHref:
+      'http://127.0.0.1:8080/?token_hash=thash-1&type=magiclink',
+    verifyCallbackStatus: 500,
+    verifyCallbackMessage: 'token verification failed',
+  });
+
+  require('../../src/app/bootstrap.js');
+  await flushAsyncWork(8);
+
+  assert.ok(
+    harness.fetchCalls.some((url) => url === 'http://127.0.0.1:8080/api/auth/verify-callback'),
+  );
+  assert.deepEqual(harness.historyReplacements, ['/']);
 
   cleanupGlobals();
 });

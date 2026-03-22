@@ -105,6 +105,15 @@ Local files in `server/output/*` remain source-of-truth fallback and are still w
 
 To enable browser auth bootstrap via `GET /api/auth/config`, also set:
 - `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`)
+- `APP_PUBLIC_ORIGIN` (recommended: `http://127.0.0.1:8080`)
+
+For local development, open the app only at:
+- `http://127.0.0.1:8080/`
+
+The auth config endpoint returns:
+- `url`
+- `publishableKey`
+- `publicOrigin`
 
 ## One-Computer Testing
 

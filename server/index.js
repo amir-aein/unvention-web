@@ -8,6 +8,10 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 loadProjectEnv(path.join(PROJECT_ROOT, ".env"));
 
 const PORT = Number(process.env.PORT || 8080);
+const APP_PUBLIC_ORIGIN = normalizePublicOrigin(
+  process.env.APP_PUBLIC_ORIGIN,
+  PORT,
+);
 const MAX_PLAYERS = 5;
 const RECONNECT_WINDOW_MS = 15 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 10 * 1000;
@@ -55,6 +59,7 @@ const SUPABASE_SYNC = createSupabaseSync({
 const SUPABASE_AUTH_CONFIG = {
   url: String(process.env.SUPABASE_URL || "").trim(),
   publishableKey: String(process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim(),
+  publicOrigin: APP_PUBLIC_ORIGIN,
 };
 
 const rooms = new Map();
@@ -109,7 +114,57 @@ const httpServer = http.createServer((req, res) => {
       enabled,
       url: enabled ? SUPABASE_AUTH_CONFIG.url : "",
       publishableKey: enabled ? SUPABASE_AUTH_CONFIG.publishableKey : "",
+      publicOrigin: SUPABASE_AUTH_CONFIG.publicOrigin,
       serverTime: Date.now(),
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/magic-link") {
+    handleAuthMagicLink(req, res).catch((error) => {
+      sendAuthError(res, 500, "magic_link_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/verify-callback") {
+    handleAuthVerifyCallback(req, res).catch((error) => {
+      sendAuthError(res, 500, "callback_exchange_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/session/user") {
+    handleAuthSessionUser(req, res).catch((error) => {
+      sendAuthError(res, 500, "session_user_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/session/refresh") {
+    handleAuthSessionRefresh(req, res).catch((error) => {
+      sendAuthError(res, 500, "refresh_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/profile/load") {
+    handleAuthProfileLoad(req, res).catch((error) => {
+      sendAuthError(res, 500, "profile_fetch_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/profile/update") {
+    handleAuthProfileUpdate(req, res).catch((error) => {
+      sendAuthError(res, 500, "profile_sync_failed", error);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/auth/logout") {
+    handleAuthLogout(req, res).catch((error) => {
+      sendAuthError(res, 500, "logout_failed", error);
     });
     return;
   }
@@ -2321,6 +2376,450 @@ function sendJson(res, statusCode, payload) {
     "access-control-allow-headers": "content-type",
   });
   res.end(JSON.stringify(payload || {}));
+}
+
+function sendAuthError(res, statusCode, stage, errorInput, extraPayload) {
+  const error = errorInput instanceof Error
+    ? errorInput
+    : new Error(String(errorInput?.message || errorInput || "unknown_error"));
+  sendJson(res, statusCode, {
+    ok: false,
+    error: String(stage || "auth_error"),
+    stage: String(stage || "auth_error"),
+    message: String(error.message || "unknown_error"),
+    ...(extraPayload && typeof extraPayload === "object" ? extraPayload : {}),
+  });
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += String(chunk || "");
+      if (raw.length > 1024 * 1024) {
+        reject(new Error("request_too_large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (!raw.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (_error) {
+        reject(new Error("invalid_json"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function handleAuthMagicLink(req, res) {
+  const authEnabled = Boolean(
+    SUPABASE_AUTH_CONFIG.url && SUPABASE_AUTH_CONFIG.publishableKey,
+  );
+  if (!authEnabled) {
+    sendAuthError(
+      res,
+      503,
+      "auth_unavailable",
+      new Error("Supabase auth is not configured on the server."),
+    );
+    return;
+  }
+
+  const body = await readJsonBody(req);
+  const email = String(body?.email || "").trim().toLowerCase();
+  const redirectTo = String(body?.redirectTo || "").trim();
+  if (!email) {
+    sendAuthError(res, 400, "missing_email", new Error("Email is required."));
+    return;
+  }
+
+  const effectiveRedirectTo = redirectTo || SUPABASE_AUTH_CONFIG.publicOrigin;
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") +
+    "/auth/v1/otp" +
+    (effectiveRedirectTo
+      ? "?redirect_to=" + encodeURIComponent(effectiveRedirectTo)
+      : "");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      "x-client-info": "unvention-local-server",
+    },
+    body: JSON.stringify({
+      email,
+      create_user: true,
+    }),
+  });
+  const responseText = await response.text();
+  if (!response.ok) {
+    sendAuthError(
+      res,
+      response.status,
+      "magic_link_failed",
+      new Error(responseText || "Supabase auth request failed."),
+      {
+        status: response.status,
+        endpoint,
+      },
+    );
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    sent: true,
+    redirectTo: effectiveRedirectTo,
+  });
+}
+
+async function handleAuthVerifyCallback(req, res) {
+  const authEnabled = Boolean(
+    SUPABASE_AUTH_CONFIG.url && SUPABASE_AUTH_CONFIG.publishableKey,
+  );
+  if (!authEnabled) {
+    sendAuthError(
+      res,
+      503,
+      "auth_unavailable",
+      new Error("Supabase auth is not configured on the server."),
+    );
+    return;
+  }
+
+  const body = await readJsonBody(req);
+  const tokenHash = String(body?.tokenHash || body?.token_hash || "").trim();
+  const type = normalizeOtpType(body?.type);
+  const code = String(body?.code || "").trim();
+  if (!tokenHash && !code) {
+    sendAuthError(
+      res,
+      400,
+      "callback_exchange_failed",
+      new Error("Missing callback token or code."),
+    );
+    return;
+  }
+  if (!tokenHash) {
+    sendAuthError(
+      res,
+      400,
+      "callback_exchange_failed",
+      new Error("Server callback verification requires tokenHash."),
+    );
+    return;
+  }
+  if (!type) {
+    sendAuthError(
+      res,
+      400,
+      "callback_exchange_failed",
+      new Error("Missing or unsupported auth callback type."),
+    );
+    return;
+  }
+
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") + "/auth/v1/verify";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      "x-client-info": "unvention-local-server",
+    },
+    body: JSON.stringify({
+      token_hash: tokenHash,
+      type,
+    }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    sendAuthError(
+      res,
+      response.status,
+      "callback_exchange_failed",
+      new Error(payload?.msg || payload?.error_description || payload?.error || "Supabase callback verification failed."),
+      {
+        endpoint,
+        status: response.status,
+      },
+    );
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    stage: "callback_exchange_complete",
+    session: payload?.session || null,
+    user: payload?.user || null,
+  });
+}
+
+async function handleAuthSessionUser(req, res) {
+  const body = await readJsonBody(req);
+  const accessToken = String(body?.accessToken || "").trim();
+  const user = await fetchAuthUser(accessToken);
+  sendJson(res, 200, {
+    ok: true,
+    user,
+  });
+}
+
+async function handleAuthSessionRefresh(req, res) {
+  const body = await readJsonBody(req);
+  const refreshToken = String(body?.refreshToken || "").trim();
+  if (!refreshToken) {
+    sendAuthError(res, 400, "refresh_failed", new Error("Refresh token is required."));
+    return;
+  }
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") +
+    "/auth/v1/token?grant_type=refresh_token";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      "x-client-info": "unvention-local-server",
+    },
+    body: JSON.stringify({
+      refresh_token: refreshToken,
+    }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    sendAuthError(
+      res,
+      response.status,
+      "refresh_failed",
+      new Error(payload?.msg || payload?.error_description || payload?.error || "Could not refresh auth session."),
+      {
+        endpoint,
+        status: response.status,
+      },
+    );
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    session: payload,
+  });
+}
+
+async function handleAuthProfileLoad(req, res) {
+  const body = await readJsonBody(req);
+  const accessToken = String(body?.accessToken || "").trim();
+  const user = await fetchAuthUser(accessToken);
+  const profile = await fetchAppUserProfile(accessToken, user?.id);
+  sendJson(res, 200, {
+    ok: true,
+    user,
+    profile,
+  });
+}
+
+async function handleAuthProfileUpdate(req, res) {
+  const body = await readJsonBody(req);
+  const accessToken = String(body?.accessToken || "").trim();
+  const patchInput = body?.patch && typeof body.patch === "object" ? body.patch : {};
+  const user = await fetchAuthUser(accessToken);
+  const patch = {};
+  if (Object.prototype.hasOwnProperty.call(patchInput, "display_name")) {
+    patch.display_name = String(patchInput.display_name || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(patchInput, "legacy_profile_token")) {
+    const token = String(patchInput.legacy_profile_token || "").trim();
+    patch.legacy_profile_token = token || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patchInput, "last_seen_at")) {
+    patch.last_seen_at = String(patchInput.last_seen_at || "").trim();
+  }
+  const updateResponse = await patchAppUserProfile(accessToken, user?.id, patch);
+  if (!updateResponse.ok) {
+    const payload = updateResponse.payload || {};
+    sendAuthError(
+      res,
+      updateResponse.status,
+      "profile_sync_failed",
+      new Error(payload?.message || payload?.error || "Could not update profile."),
+      {
+        code: payload?.code || "",
+        details: payload?.details || "",
+        hint: payload?.hint || "",
+      },
+    );
+    return;
+  }
+  const profile = await fetchAppUserProfile(accessToken, user?.id);
+  sendJson(res, 200, {
+    ok: true,
+    user,
+    profile,
+  });
+}
+
+async function handleAuthLogout(req, res) {
+  const body = await readJsonBody(req);
+  const accessToken = String(body?.accessToken || "").trim();
+  if (!accessToken) {
+    sendJson(res, 200, { ok: true, loggedOut: true });
+    return;
+  }
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") + "/auth/v1/logout";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      authorization: "Bearer " + accessToken,
+      "x-client-info": "unvention-local-server",
+    },
+  });
+  if (!response.ok) {
+    const payload = await parseJsonResponse(response);
+    sendAuthError(
+      res,
+      response.status,
+      "logout_failed",
+      new Error(payload?.msg || payload?.error_description || payload?.error || "Could not log out."),
+      {
+        endpoint,
+        status: response.status,
+      },
+    );
+    return;
+  }
+  sendJson(res, 200, { ok: true, loggedOut: true });
+}
+
+async function parseJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function fetchAuthUser(accessTokenInput) {
+  const accessToken = String(accessTokenInput || "").trim();
+  if (!accessToken) {
+    throw new Error("Access token is required.");
+  }
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") + "/auth/v1/user";
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      authorization: "Bearer " + accessToken,
+      "x-client-info": "unvention-local-server",
+    },
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok || !payload?.id) {
+    throw new Error(
+      payload?.msg ||
+        payload?.error_description ||
+        payload?.error ||
+        "Could not resolve authenticated user.",
+    );
+  }
+  return payload;
+}
+
+async function fetchAppUserProfile(accessTokenInput, userIdInput) {
+  const accessToken = String(accessTokenInput || "").trim();
+  const userId = String(userIdInput || "").trim();
+  if (!accessToken || !userId) {
+    return null;
+  }
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") +
+    "/rest/v1/app_users?select=" +
+    encodeURIComponent("user_id,email,display_name,legacy_profile_token,last_seen_at") +
+    "&user_id=eq." +
+    encodeURIComponent(userId);
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      authorization: "Bearer " + accessToken,
+      accept: "application/json",
+      "x-client-info": "unvention-local-server",
+    },
+  });
+  const payload = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Could not load auth profile.",
+    );
+  }
+  return Array.isArray(payload) ? payload[0] || null : null;
+}
+
+async function patchAppUserProfile(accessTokenInput, userIdInput, patchInput) {
+  const accessToken = String(accessTokenInput || "").trim();
+  const userId = String(userIdInput || "").trim();
+  const patch = patchInput && typeof patchInput === "object" ? patchInput : {};
+  const endpoint =
+    String(SUPABASE_AUTH_CONFIG.url).replace(/\/$/, "") +
+    "/rest/v1/app_users?user_id=eq." +
+    encodeURIComponent(userId);
+  const response = await fetch(endpoint, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_AUTH_CONFIG.publishableKey,
+      authorization: "Bearer " + accessToken,
+      prefer: "return=minimal",
+      "x-client-info": "unvention-local-server",
+    },
+    body: JSON.stringify(patch),
+  });
+  return {
+    ok: response.ok,
+    status: Number(response.status || 500),
+    payload: await parseJsonResponse(response),
+  };
+}
+
+function normalizeOtpType(typeInput) {
+  const type = String(typeInput || "").trim().toLowerCase();
+  if (
+    type === "email" ||
+    type === "recovery" ||
+    type === "invite" ||
+    type === "email_change" ||
+    type === "magiclink" ||
+    type === "signup"
+  ) {
+    // Newer Supabase docs recommend `email`; keep legacy values for compatibility.
+    return type === "magiclink" || type === "signup" ? "email" : type;
+  }
+  return "";
+}
+
+function normalizePublicOrigin(originInput, portInput) {
+  const fallback = "http://127.0.0.1:" + String(portInput || 8080);
+  const raw = String(originInput || "").trim();
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(raw);
+    return String(parsed.origin || fallback).replace(/\/$/, "");
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 function buildRoomDirectoryPayload() {
